@@ -1,0 +1,17 @@
+echo "
+# Python
+__pycache__/
+*.pyc
+.env
+
+# Data
+data/raw/
+*.nc
+*.tif
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+" > .gitignore
