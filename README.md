@@ -133,6 +133,6 @@ GreenScope Analytics is building decision-grade climate intelligence tools for r
 
 ---
 
-*If you’re interested in collaborating or reviewing the approach, feel free to open an issue or start a discussion.
+*If you’re interested in collaborating or reviewing the approach, feel free to open an issue or start a discussion.*
 
-email: njugunalh@gmail.com*
+*email: njugunalh@gmail.com*
