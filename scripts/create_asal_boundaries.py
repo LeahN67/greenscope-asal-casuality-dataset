@@ -3,14 +3,24 @@ import geopandas as gpd
 from pathlib import Path
 import json
 import time
+import os
 
-# Setup Paths
-BASE_DIR = Path("data/raw/boundaries")
+# ------------------------------------------------------------------
+# SETUP PATHS - GENERALIZED
+# ------------------------------------------------------------------
+# Use environment variable with fallback to current directory
+PROJECT_ROOT = Path(os.getenv('GREENSCOPE_PROJECT_ROOT', Path.cwd()))
+
+# Define relative paths from project root
+BASE_DIR = PROJECT_ROOT / "data" / "raw" / "boundaries"
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 RAW_FILE = BASE_DIR / "kenya_raw_adm1.geojson"
 FINAL_ASAL = BASE_DIR / "asal_boundary.geojson"
 
-# ASAL Counties list
+# ------------------------------------------------------------------
+# CONFIGURATION
+# ------------------------------------------------------------------
+# ASAL Counties list - can be overridden via configuration
 ASAL_COUNTIES = [
     "Turkana", "Marsabit", "Mandera", "Wajir", "Garissa", "Tana River", 
     "Isiolo", "Samburu", "Baringo", "West Pokot", "Laikipia", "Narok", 
@@ -86,11 +96,23 @@ def download_with_retry(url, output_path, max_retries=3):
     return False
 
 
-def download_from_geoboundaries_api():
-    """Download from geoBoundaries API"""
-    print("📥 Method 1: geoBoundaries API")
+def download_from_geoboundaries_api(country_code="KEN", admin_level="ADM1", output_file=None):
+    """
+    Download from geoBoundaries API
     
-    api_url = "https://www.geoboundaries.org/api/current/gbOpen/KEN/ADM1/"
+    Parameters:
+    -----------
+    country_code : str
+        ISO3 country code (default: KEN for Kenya)
+    admin_level : str
+        Administrative level (default: ADM1)
+    output_file : Path, optional
+        Output file path
+    """
+    output_file = output_file or RAW_FILE
+    print(f"📥 Method 1: geoBoundaries API ({country_code}/{admin_level})")
+    
+    api_url = f"https://www.geoboundaries.org/api/current/gbOpen/{country_code}/{admin_level}/"
     
     try:
         # Get the metadata
@@ -103,7 +125,7 @@ def download_from_geoboundaries_api():
         if 'gjDownloadURL' in metadata:
             download_url = metadata['gjDownloadURL']
             print(f"   Found download URL")
-            return download_with_retry(download_url, RAW_FILE)
+            return download_with_retry(download_url, output_file)
         else:
             print(f"   ✗ No download URL in metadata")
             return False
@@ -113,34 +135,58 @@ def download_from_geoboundaries_api():
         return False
 
 
-def download_from_gadm():
-    """Download from GADM"""
-    print("📥 Method 2: GADM Database")
+def download_from_gadm(country_code="KEN", admin_level=1, output_file=None):
+    """
+    Download from GADM
     
-    url = "https://geodata.ucdavis.edu/gadm/gadm4.1/json/gadm41_KEN_1.json"
-    return download_with_retry(url, RAW_FILE)
+    Parameters:
+    -----------
+    country_code : str
+        ISO3 country code (default: KEN for Kenya)
+    admin_level : int
+        Administrative level (default: 1)
+    output_file : Path, optional
+        Output file path
+    """
+    output_file = output_file or RAW_FILE
+    print(f"📥 Method 2: GADM Database ({country_code}/ADM{admin_level})")
+    
+    url = f"https://geodata.ucdavis.edu/gadm/gadm4.1/json/gadm41_{country_code}_{admin_level}.json"
+    return download_with_retry(url, output_file)
 
 
-def download_boundaries():
-    """Try multiple sources until one succeeds"""
+def download_boundaries(country_code="KEN", admin_level=1, output_file=None):
+    """
+    Try multiple sources until one succeeds
+    
+    Parameters:
+    -----------
+    country_code : str
+        ISO3 country code (default: KEN for Kenya)
+    admin_level : int
+        Administrative level (default: 1)
+    output_file : Path, optional
+        Output file path
+    """
+    output_file = output_file or RAW_FILE
     
     # Clean up any existing corrupted file
-    if RAW_FILE.exists():
-        RAW_FILE.unlink()
+    if output_file.exists():
+        output_file.unlink()
         print("🗑 Removed existing file\n")
     
     print("="*60)
-    print("Downloading Kenya Administrative Boundaries")
+    print(f"Downloading {country_code} Administrative Boundaries (Level {admin_level})")
     print("="*60)
     
     # Try geoBoundaries API first
-    if download_from_geoboundaries_api():
+    if download_from_geoboundaries_api(country_code, f"ADM{admin_level}", output_file):
         return True
     
     print("\n" + "-"*60 + "\n")
     
     # Try GADM as fallback
-    if download_from_gadm():
+    if download_from_gadm(country_code, admin_level, output_file):
         return True
     
     print("\n" + "="*60)
@@ -148,18 +194,35 @@ def download_boundaries():
     print("="*60)
     print("\n💡 Manual download option:")
     print("1. Visit: https://www.geoboundaries.org/downloadCGAZ.html")
-    print("2. Select: Kenya → ADM1")
+    print(f"2. Select: {country_code} → ADM{admin_level}")
     print("3. Download the GeoJSON file")
-    print(f"4. Save it as: {RAW_FILE.absolute()}")
+    print(f"4. Save it as: {output_file.absolute()}")
     print("\nThen run this script again.")
     
     return False
 
 
-def process_asal_boundary():
-    """Process the downloaded boundary file"""
+def process_asal_boundary(raw_file=None, output_file=None, counties_list=None, 
+                          name_column_hint=None):
+    """
+    Process the downloaded boundary file
     
-    if not RAW_FILE.exists():
+    Parameters:
+    -----------
+    raw_file : Path, optional
+        Path to raw boundary file
+    output_file : Path, optional
+        Path to save processed ASAL boundary
+    counties_list : list, optional
+        List of county names to filter
+    name_column_hint : str, optional
+        Hint for which column contains names
+    """
+    raw_file = raw_file or RAW_FILE
+    output_file = output_file or FINAL_ASAL
+    counties_list = counties_list or ASAL_COUNTIES
+    
+    if not raw_file.exists():
         print("❌ No boundary file found. Run download first.")
         return False
     
@@ -170,12 +233,15 @@ def process_asal_boundary():
     try:
         # Read the file
         print("📖 Reading boundary file...")
-        gdf = gpd.read_file(RAW_FILE)
+        gdf = gpd.read_file(raw_file)
         
         print(f"   ✓ Loaded {len(gdf)} administrative units")
         
         # Find the name column (different sources use different names)
         name_columns = ['shapeName', 'NAME_1', 'ADM1_EN', 'name', 'NAME']
+        if name_column_hint:
+            name_columns.insert(0, name_column_hint)
+        
         name_col = None
         
         for col in name_columns:
@@ -193,13 +259,13 @@ def process_asal_boundary():
         
         # Standardize names for matching
         gdf['match_name'] = gdf[name_col].str.replace('-', ' ').str.replace('_', ' ').str.title().str.strip()
-        clean_asal_list = [c.replace('-', ' ').title().strip() for c in ASAL_COUNTIES]
+        clean_counties_list = [c.replace('-', ' ').title().strip() for c in counties_list]
         
-        # Filter ASAL counties
-        print(f"\n✂ Filtering {len(ASAL_COUNTIES)} ASAL counties...")
-        asal_gdf = gdf[gdf['match_name'].isin(clean_asal_list)]
+        # Filter counties
+        print(f"\n✂ Filtering {len(counties_list)} counties...")
+        filtered_gdf = gdf[gdf['match_name'].isin(clean_counties_list)]
         
-        if asal_gdf.empty:
+        if filtered_gdf.empty:
             print("   ❌ No matches found!")
             print("\n   Trying fuzzy matching...")
             
@@ -208,39 +274,42 @@ def process_asal_boundary():
             available_names = gdf['match_name'].tolist()
             
             matched = []
-            for asal in clean_asal_list:
-                matches = get_close_matches(asal, available_names, n=1, cutoff=0.8)
+            for county in clean_counties_list:
+                matches = get_close_matches(county, available_names, n=1, cutoff=0.8)
                 if matches:
                     matched.append(matches[0])
-                    print(f"   ~ Matched '{asal}' → '{matches[0]}'")
+                    print(f"   ~ Matched '{county}' → '{matches[0]}'")
             
             if matched:
-                asal_gdf = gdf[gdf['match_name'].isin(matched)]
+                filtered_gdf = gdf[gdf['match_name'].isin(matched)]
         
-        if asal_gdf.empty:
+        if filtered_gdf.empty:
             print("   ❌ Still no matches. Please check county names.")
             return False
         
-        print(f"   ✓ Matched {len(asal_gdf)} counties")
+        print(f"   ✓ Matched {len(filtered_gdf)} counties")
         
         # Dissolve into single boundary
-        print("\n🔗 Merging into single ASAL boundary...")
-        asal_boundary = asal_gdf.dissolve()
+        print("\n🔗 Merging into single boundary...")
+        merged_boundary = filtered_gdf.dissolve()
+        
+        # Ensure output directory exists
+        output_file.parent.mkdir(parents=True, exist_ok=True)
         
         # Save
-        asal_boundary.to_file(FINAL_ASAL, driver='GeoJSON')
+        merged_boundary.to_file(output_file, driver='GeoJSON')
         
         print("\n" + "="*60)
         print("✅ SUCCESS!")
         print("="*60)
-        print(f"📍 ASAL boundary saved to: {FINAL_ASAL}")
-        print(f"📊 Includes {len(asal_gdf)} counties:")
-        for county in sorted(asal_gdf[name_col].tolist()):
+        print(f"📁 Boundary saved to: {output_file}")
+        print(f"📊 Includes {len(filtered_gdf)} counties:")
+        for county in sorted(filtered_gdf[name_col].tolist()):
             print(f"   • {county}")
         
         # Calculate area
-        area_km2 = asal_boundary.to_crs('EPSG:32637').area.sum() / 1e6
-        print(f"\n📐 Total area: {area_km2:,.0f} km²")
+        area_km2 = merged_boundary.to_crs('EPSG:32637').area.sum() / 1e6
+        print(f"\n📏 Total area: {area_km2:,.0f} km²")
         
         return True
         
@@ -251,28 +320,98 @@ def process_asal_boundary():
         return False
 
 
-def main():
+def main(project_root=None, country_code="KEN", admin_level=1, 
+         counties_list=None, force_reprocess=False):
+    """
+    Main function to generate boundary
+    
+    Parameters:
+    -----------
+    project_root : str or Path, optional
+        Base project directory
+    country_code : str
+        ISO3 country code (default: KEN)
+    admin_level : int
+        Administrative level (default: 1)
+    counties_list : list, optional
+        List of counties to filter
+    force_reprocess : bool
+        Force reprocessing even if output exists
+    """
+    global PROJECT_ROOT, BASE_DIR, RAW_FILE, FINAL_ASAL
+    
+    # Update paths if project root is provided
+    if project_root:
+        PROJECT_ROOT = Path(project_root)
+        BASE_DIR = PROJECT_ROOT / "data" / "raw" / "boundaries"
+        BASE_DIR.mkdir(parents=True, exist_ok=True)
+        RAW_FILE = BASE_DIR / f"{country_code.lower()}_raw_adm{admin_level}.geojson"
+        FINAL_ASAL = BASE_DIR / "asal_boundary.geojson"
+    
+    counties_list = counties_list or ASAL_COUNTIES
+    
     print("="*60)
-    print("Kenya ASAL Boundary Generator")
+    print(f"{country_code} ASAL Boundary Generator")
     print("="*60)
     
     # Step 1: Download
     if not RAW_FILE.exists() or RAW_FILE.stat().st_size < 1000:
-        if not download_boundaries():
+        if not download_boundaries(country_code, admin_level, RAW_FILE):
             return
     else:
         print(f"✓ Boundary file exists ({RAW_FILE.stat().st_size:,} bytes)")
     
     # Step 2: Process
-    if not FINAL_ASAL.exists():
-        if not process_asal_boundary():
+    if not FINAL_ASAL.exists() or force_reprocess:
+        if not process_asal_boundary(RAW_FILE, FINAL_ASAL, counties_list):
             return
     else:
-        print(f"\n✓ ASAL boundary already exists at: {FINAL_ASAL}")
+        print(f"\n✓ Boundary already exists at: {FINAL_ASAL}")
         response = input("Re-generate? (y/n): ")
         if response.lower() == 'y':
-            process_asal_boundary()
+            process_asal_boundary(RAW_FILE, FINAL_ASAL, counties_list)
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description='Generate ASAL boundary from administrative boundaries'
+    )
+    parser.add_argument(
+        '--project-root', 
+        type=str, 
+        help='Base project directory (default: current directory or GREENSCOPE_PROJECT_ROOT env var)'
+    )
+    parser.add_argument(
+        '--country', 
+        type=str, 
+        default='KEN',
+        help='ISO3 country code (default: KEN)'
+    )
+    parser.add_argument(
+        '--admin-level', 
+        type=int, 
+        default=1,
+        help='Administrative level (default: 1)'
+    )
+    parser.add_argument(
+        '--counties', 
+        nargs='+',
+        help='List of county names to include (default: Kenya ASAL counties)'
+    )
+    parser.add_argument(
+        '--force', 
+        action='store_true',
+        help='Force reprocessing even if output exists'
+    )
+    
+    args = parser.parse_args()
+    
+    main(
+        project_root=args.project_root,
+        country_code=args.country,
+        admin_level=args.admin_level,
+        counties_list=args.counties,
+        force_reprocess=args.force
+    )

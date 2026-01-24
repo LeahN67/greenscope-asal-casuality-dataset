@@ -7,6 +7,7 @@ Features:
 - Retry failed requests
 - Progress tracking
 - Error handling
+- Generalized paths and configuration
 """
 
 import requests
@@ -15,19 +16,63 @@ import time
 from pathlib import Path
 import getpass
 import sys
+import os
 from typing import Optional, Dict, Any
+
+# ------------------------------------------------------------------
+# PATH CONFIGURATION
+# ------------------------------------------------------------------
+# Use environment variable with fallback to current directory
+PROJECT_ROOT = Path(os.getenv('GREENSCOPE_PROJECT_ROOT', Path.cwd()))
+
+# Default paths
+DEFAULT_BOUNDARY_FILE = PROJECT_ROOT / "data" / "raw" / "boundaries" / "asal_boundary.geojson"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "raw" / "modis_ndvi"
+DEFAULT_TASK_FILE = PROJECT_ROOT / "modis_download_task_id.txt"
+
 
 class AppEEARSDownloader:
     """Download MODIS data via AppEEARS API with robust error handling."""
     
-    def __init__(self):
-        self.api_url = "https://appeears.earthdatacloud.nasa.gov/api"
+    def __init__(self, api_url=None, max_retries=3, retry_delay=5):
+        """
+        Initialize AppEEARS downloader.
+        
+        Parameters:
+        -----------
+        api_url : str, optional
+            AppEEARS API URL (default: NASA EarthData Cloud)
+        max_retries : int
+            Maximum number of retry attempts (default: 3)
+        retry_delay : int
+            Delay between retries in seconds (default: 5)
+        """
+        self.api_url = api_url or "https://appeears.earthdatacloud.nasa.gov/api"
         self.token = None
-        self.max_retries = 3
-        self.retry_delay = 5
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
         
     def login(self, username: Optional[str] = None, password: Optional[str] = None) -> bool:
-        """Login to AppEEARS and get authentication token."""
+        """
+        Login to AppEEARS and get authentication token.
+        
+        Parameters:
+        -----------
+        username : str, optional
+            NASA Earthdata username (will prompt if not provided)
+        password : str, optional
+            NASA Earthdata password (will prompt if not provided)
+            
+        Returns:
+        --------
+        bool
+            True if authentication successful, False otherwise
+        """
+        # Check for credentials in environment variables
+        if username is None:
+            username = os.getenv('NASA_EARTHDATA_USERNAME')
+        if password is None:
+            password = os.getenv('NASA_EARTHDATA_PASSWORD')
         
         print("🔐 NASA Earthdata Login")
         print("=" * 70)
@@ -71,12 +116,37 @@ class AppEEARSDownloader:
         
         return False
     
-    def create_area_request(self, aoi_file: Path, start_date: str, end_date: str, output_name: str) -> Optional[str]:
-        """Create an area-based data request."""
+    def create_area_request(self, aoi_file: Path, start_date: str, end_date: str, 
+                           output_name: str, product: str = "MOD13Q1.061",
+                           layer: str = "_250m_16_days_NDVI") -> Optional[str]:
+        """
+        Create an area-based data request.
         
+        Parameters:
+        -----------
+        aoi_file : Path
+            Path to GeoJSON boundary file
+        start_date : str
+            Start date (MM-DD-YYYY format)
+        end_date : str
+            End date (MM-DD-YYYY format)
+        output_name : str
+            Name for the download task
+        product : str
+            MODIS product (default: MOD13Q1.061)
+        layer : str
+            Data layer to download (default: _250m_16_days_NDVI)
+            
+        Returns:
+        --------
+        str or None
+            Task ID if successful, None otherwise
+        """
         print(f"\n📝 Creating data request...")
         print(f"   Study area: {aoi_file}")
         print(f"   Date range: {start_date} to {end_date}")
+        print(f"   Product: {product}")
+        print(f"   Layer: {layer}")
         
         try:
             # Read the GeoJSON boundary
@@ -103,8 +173,8 @@ class AppEEARSDownloader:
                 ],
                 "layers": [
                     {
-                        "product": "MOD13Q1.061",
-                        "layer": "_250m_16_days_NDVI"
+                        "product": product,
+                        "layer": layer
                     }
                 ],
                 "output": {
@@ -219,7 +289,7 @@ class AppEEARSDownloader:
                     time.sleep(check_interval)
                     
         except KeyboardInterrupt:
-            print(f"\n\n⏸️  Interrupted by user")
+            print(f"\n\n⏸️ Interrupted by user")
             print(f"   Your task is still processing on NASA's servers")
             print(f"   Run the script again later to check status and download")
             return False
@@ -317,12 +387,12 @@ class AppEEARSDownloader:
                         # Create parent directories if needed
                         output_path.parent.mkdir(parents=True, exist_ok=True)
                         
-                        # Download with progress and chunk timeout
+                        # Download with progress
                         bytes_downloaded = 0
                         chunk_start_time = time.time()
-                        max_chunk_time = 60  # 60 seconds per chunk max
+                        max_chunk_time = 60
                         last_progress_update = time.time()
-                        progress_interval = 2  # Update every 2 seconds
+                        progress_interval = 2
                         
                         with open(output_path, 'wb') as f:
                             for chunk in file_response.iter_content(chunk_size=8192):
@@ -341,7 +411,7 @@ class AppEEARSDownloader:
                                     if time.time() - chunk_start_time > max_chunk_time:
                                         raise requests.exceptions.Timeout("Chunk download timeout")
                                     
-                                    chunk_start_time = time.time()  # Reset timer for next chunk
+                                    chunk_start_time = time.time()
                         
                         # Verify file was written
                         if output_path.exists() and output_path.stat().st_size > 0:
@@ -389,24 +459,55 @@ class AppEEARSDownloader:
         return failed == 0
 
 
-def download_modis_data():
-    """Main function to download MODIS data."""
+def download_modis_data(boundary_file=None, start_date="01-01-2020", end_date="12-31-2025",
+                       output_dir=None, task_name=None, product="MOD13Q1.061",
+                       layer="_250m_16_days_NDVI", username=None, password=None,
+                       wait_for_completion=True):
+    """
+    Main function to download MODIS data.
     
-    print("🛰️  MODIS Data Downloader (AppEEARS API)")
+    Parameters:
+    -----------
+    boundary_file : Path, optional
+        Path to study area boundary GeoJSON
+    start_date : str
+        Start date in MM-DD-YYYY format
+    end_date : str
+        End date in MM-DD-YYYY format
+    output_dir : Path, optional
+        Output directory for downloaded files
+    task_name : str, optional
+        Name for the download task
+    product : str
+        MODIS product (default: MOD13Q1.061)
+    layer : str
+        Data layer (default: _250m_16_days_NDVI)
+    username : str, optional
+        NASA Earthdata username
+    password : str, optional
+        NASA Earthdata password
+    wait_for_completion : bool
+        Whether to wait for processing to complete
+        
+    Returns:
+    --------
+    str or None
+        Task ID if successful, None otherwise
+    """
+    boundary_file = Path(boundary_file) if boundary_file else DEFAULT_BOUNDARY_FILE
+    output_dir = Path(output_dir) if output_dir else DEFAULT_OUTPUT_DIR
+    
+    if task_name is None:
+        task_name = f"MODIS_NDVI_{start_date.replace('-', '')}_{end_date.replace('-', '')}"
+    
+    print("🛰️ MODIS Data Downloader (AppEEARS API)")
     print("=" * 70)
     
-    # Configuration
-    AOI_FILE = Path("data/raw/boundaries/asal_boundary.geojson")
-    START_DATE = "01-01-2020"
-    END_DATE = "12-31-2025"
-    OUTPUT_DIR = Path("data/raw/modis_ndvi")
-    TASK_NAME = "MODIS_NDVI_Kenya_ASAL_2020_2025"
-    
     # Check if boundary file exists
-    if not AOI_FILE.exists():
-        print(f"❌ Boundary file not found: {AOI_FILE}")
-        print("   Please ensure your ASAL boundary GeoJSON exists")
-        return
+    if not boundary_file.exists():
+        print(f"❌ Boundary file not found: {boundary_file}")
+        print("   Please ensure your boundary GeoJSON exists")
+        return None
     
     # Initialize downloader
     downloader = AppEEARSDownloader()
@@ -416,57 +517,73 @@ def download_modis_data():
     print("   If you don't have one, register at:")
     print("   https://urs.earthdata.nasa.gov/users/new")
     
-    if not downloader.login():
-        return
+    if not downloader.login(username, password):
+        return None
     
     # Step 2: Submit request
     task_id = downloader.create_area_request(
-        AOI_FILE,
-        START_DATE,
-        END_DATE,
-        TASK_NAME
+        boundary_file,
+        start_date,
+        end_date,
+        task_name,
+        product,
+        layer
     )
     
     if not task_id:
-        return
+        return None
     
     # Step 3: Save task ID for later
-    task_file = Path("modis_download_task_id.txt")
+    task_file = DEFAULT_TASK_FILE
     try:
+        task_file.parent.mkdir(parents=True, exist_ok=True)
         with open(task_file, 'w') as f:
             f.write(task_id)
         print(f"\n💾 Task ID saved to {task_file}")
         print(f"   You can resume download later using this ID")
     except Exception as e:
-        print(f"⚠️  Warning: Could not save task ID: {e}")
+        print(f"⚠️ Warning: Could not save task ID: {e}")
         print(f"   Please note your task ID: {task_id}")
     
     # Step 4: Wait for completion
-    print("\n" + "="*70)
-    user_input = input("Wait for processing to complete? (y/n): ").lower().strip()
-    
-    if user_input == 'y':
-        if downloader.wait_for_completion(task_id):
-            # Step 5: Download files
-            downloader.download_files(task_id, OUTPUT_DIR)
+    if wait_for_completion:
+        print("\n" + "="*70)
+        user_input = input("Wait for processing to complete? (y/n): ").lower().strip()
+        
+        if user_input == 'y':
+            if downloader.wait_for_completion(task_id):
+                # Step 5: Download files
+                downloader.download_files(task_id, output_dir)
         else:
-            print("\n⚠️  Processing not complete")
-            print(f"   Run this script later to download files:")
-            print(f"   python -m scripts.fetch_modis_ndvi {task_id}")
-    else:
-        print("\n💡 To check status or download files later, run:")
-        print(f"   python -m scripts.fetch_modis_ndvi {task_id}")
+            print("\n💡 To check status or download files later, run:")
+            print(f"   python fetch_modis_ndvi.py --resume {task_id}")
+    
+    return task_id
 
 
-def resume_download(task_id: str):
-    """Resume a previous download using task ID."""
+def resume_download(task_id: str, output_dir=None, username=None, password=None):
+    """
+    Resume a previous download using task ID.
+    
+    Parameters:
+    -----------
+    task_id : str
+        AppEEARS task ID
+    output_dir : Path, optional
+        Output directory for files
+    username : str, optional
+        NASA Earthdata username
+    password : str, optional
+        NASA Earthdata password
+    """
+    output_dir = Path(output_dir) if output_dir else DEFAULT_OUTPUT_DIR
     
     print("🔄 Resuming MODIS download...")
     print("=" * 70)
     
     downloader = AppEEARSDownloader()
     
-    if not downloader.login():
+    if not downloader.login(username, password):
         return
     
     # Check status
@@ -483,8 +600,7 @@ def resume_download(task_id: str):
     
     if state == "done":
         print("✅ Data is ready for download!")
-        OUTPUT_DIR = Path("data/raw/modis_ndvi")
-        downloader.download_files(task_id, OUTPUT_DIR)
+        downloader.download_files(task_id, output_dir)
     elif state == "error":
         print("❌ Processing failed")
         error_msg = status.get("message", "No error message")
@@ -493,23 +609,121 @@ def resume_download(task_id: str):
         print(f"⏳ Task is still {state}")
         print("   Estimated time: 1-3 hours from submission")
         print(f"\n💡 Check again later by running:")
-        print(f"   python -m scripts.fetch_modis_ndvi {task_id}")
+        print(f"   python fetch_modis_ndvi.py --resume {task_id}")
     else:
         print(f"❓ Unknown status: {state}")
         print("   Please check the AppEEARS website for more information")
 
 
 if __name__ == '__main__':
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description='Download MODIS NDVI data via NASA AppEEARS API',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument(
+        '--project-root',
+        type=str,
+        help='Base project directory'
+    )
+    parser.add_argument(
+        '--boundary',
+        type=str,
+        help='Path to boundary GeoJSON file'
+    )
+    parser.add_argument(
+        '--start-date',
+        type=str,
+        default='01-01-2020',
+        help='Start date (MM-DD-YYYY format, default: 01-01-2020)'
+    )
+    parser.add_argument(
+        '--end-date',
+        type=str,
+        default='12-31-2025',
+        help='End date (MM-DD-YYYY format, default: 12-31-2025)'
+    )
+    parser.add_argument(
+        '--output-dir',
+        type=str,
+        help='Output directory for downloaded files'
+    )
+    parser.add_argument(
+        '--task-name',
+        type=str,
+        help='Name for the download task'
+    )
+    parser.add_argument(
+        '--product',
+        type=str,
+        default='MOD13Q1.061',
+        help='MODIS product (default: MOD13Q1.061)'
+    )
+    parser.add_argument(
+        '--layer',
+        type=str,
+        default='_250m_16_days_NDVI',
+        help='Data layer (default: _250m_16_days_NDVI)'
+    )
+    parser.add_argument(
+        '--username',
+        type=str,
+        help='NASA Earthdata username (or set NASA_EARTHDATA_USERNAME env var)'
+    )
+    parser.add_argument(
+        '--password',
+        type=str,
+        help='NASA Earthdata password (or set NASA_EARTHDATA_PASSWORD env var)'
+    )
+    parser.add_argument(
+        '--resume',
+        type=str,
+        metavar='TASK_ID',
+        help='Resume download with existing task ID'
+    )
+    parser.add_argument(
+        '--no-wait',
+        action='store_true',
+        help='Do not wait for processing to complete'
+    )
+    
+    args = parser.parse_args()
+    
+    # Update paths if project root is provided
+    if args.project_root:
+        global PROJECT_ROOT, DEFAULT_BOUNDARY_FILE, DEFAULT_OUTPUT_DIR, DEFAULT_TASK_FILE
+        PROJECT_ROOT = Path(args.project_root)
+        DEFAULT_BOUNDARY_FILE = PROJECT_ROOT / "data" / "raw" / "boundaries" / "asal_boundary.geojson"
+        DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "raw" / "modis_ndvi"
+        DEFAULT_TASK_FILE = PROJECT_ROOT / "modis_download_task_id.txt"
+    
     try:
-        if len(sys.argv) > 1:
+        if args.resume:
             # Resume with task ID
-            task_id = sys.argv[1]
-            resume_download(task_id)
+            resume_download(
+                task_id=args.resume,
+                output_dir=args.output_dir,
+                username=args.username,
+                password=args.password
+            )
         else:
             # New download
-            download_modis_data()
+            download_modis_data(
+                boundary_file=args.boundary,
+                start_date=args.start_date,
+                end_date=args.end_date,
+                output_dir=args.output_dir,
+                task_name=args.task_name,
+                product=args.product,
+                layer=args.layer,
+                username=args.username,
+                password=args.password,
+                wait_for_completion=not args.no_wait
+            )
     except KeyboardInterrupt:
-        print("\n\n⏸️  Interrupted by user. Exiting gracefully...")
+        print("\n\n⏸️ Interrupted by user. Exiting gracefully...")
         sys.exit(0)
     except Exception as e:
         print(f"\n❌ Unexpected error: {e}")

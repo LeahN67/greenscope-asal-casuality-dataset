@@ -6,7 +6,8 @@ Unified ASAL Data Cube (MEMORY-EFFICIENT FOR LARGE FILES)
 # ------------------------------------------------------------------
 # PROJ SAFETY
 # ------------------------------------------------------------------
-import pyproj, os
+import pyproj
+import os
 os.environ["PROJ_LIB"] = pyproj.datadir.get_data_dir()
 
 # ------------------------------------------------------------------
@@ -22,15 +23,74 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ------------------------------------------------------------------
+# PATH CONFIGURATION
+# ------------------------------------------------------------------
+# Use environment variable with fallback to current directory
+PROJECT_ROOT = Path(os.getenv('GREENSCOPE_PROJECT_ROOT', Path.cwd()))
+
+# Default paths (can be overridden)
+DEFAULT_CHIRPS = PROJECT_ROOT / "data" / "raw" / "chirps" / "monthly" / "chirps-v2.0.monthly.nc"
+DEFAULT_ERA5 = PROJECT_ROOT / "data" / "raw" / "era5_land" / "data_stream-moda.nc"
+DEFAULT_MODIS = PROJECT_ROOT / "data" / "raw" / "modis_ndvi" / "ndvi"
+DEFAULT_BOUNDARY = PROJECT_ROOT / "data" / "raw" / "boundaries" / "asal_boundary.geojson"
+DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "processed" / "module0"
+
+
+# ------------------------------------------------------------------
 class Module0Pipeline:
-    def __init__(self, chirps_path, era5_path, modis_dir, boundary_path, output_dir):
+    """
+    Data cube creation pipeline for climate and vegetation data
+    
+    Parameters:
+    -----------
+    chirps_path : str or Path
+        Path to CHIRPS precipitation NetCDF file
+    era5_path : str or Path
+        Path to ERA5 land data NetCDF file
+    modis_dir : str or Path
+        Directory containing MODIS NDVI NetCDF files
+    boundary_path : str or Path
+        Path to study area boundary GeoJSON file
+    output_dir : str or Path
+        Directory for output data cube
+    output_filename : str, optional
+        Name of output NetCDF file (default: module0_asal_datacube.nc)
+    chunk_size : dict, optional
+        Custom chunk sizes for processing
+    """
+    
+    def __init__(self, chirps_path, era5_path, modis_dir, boundary_path, output_dir,
+                 output_filename="module0_asal_datacube.nc", chunk_size=None):
         self.chirps = Path(chirps_path)
         self.era5 = Path(era5_path)
         self.modis = Path(modis_dir)
         self.boundary = Path(boundary_path)
         self.output_dir = Path(output_dir)
+        self.output_filename = output_filename
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Default chunk sizes (can be customized)
+        self.chunk_size = chunk_size or {
+            'time': 12,
+            'latitude': 200,
+            'longitude': 200
+        }
+        
+        # Validate input files
+        self._validate_inputs()
 
+    # --------------------------------------------------------------
+    def _validate_inputs(self):
+        """Validate that all input files exist"""
+        if not self.chirps.exists():
+            raise FileNotFoundError(f"CHIRPS file not found: {self.chirps}")
+        if not self.era5.exists():
+            raise FileNotFoundError(f"ERA5 file not found: {self.era5}")
+        if not self.modis.exists():
+            raise FileNotFoundError(f"MODIS directory not found: {self.modis}")
+        if not self.boundary.exists():
+            raise FileNotFoundError(f"Boundary file not found: {self.boundary}")
+    
     # --------------------------------------------------------------
     def _get_bbox(self, gdf):
         """Get bounding box for spatial subsetting"""
@@ -67,29 +127,43 @@ class Module0Pipeline:
         return ds
 
     # --------------------------------------------------------------
-    def run(self):
-        print("\n🚀 MODULE 0 – ASAL DATA CUBE")
-        print("=" * 60)
+    def _rename_coords(self, dataset):
+        """Ensure consistent lat/lon naming"""
+        mapping = {}
+        if 'lat' in dataset.coords: 
+            mapping['lat'] = 'latitude'
+        if 'lon' in dataset.coords: 
+            mapping['lon'] = 'longitude'
+        return dataset.rename(mapping) if mapping else dataset
 
-        # Load boundary and get bbox
-        gdf = gpd.read_file(self.boundary).to_crs("EPSG:4326")
-        bbox = self._get_bbox(gdf)
-        print(f"📍 Study area: {bbox['lat_min']:.2f}°-{bbox['lat_max']:.2f}°N, "
-              f"{bbox['lon_min']:.2f}°-{bbox['lon_max']:.2f}°E")
-
-        # ------------------- CHIRPS -------------------
+    # --------------------------------------------------------------
+    def load_precipitation(self, bbox):
+        """Load and process precipitation data"""
         print("\n🌧️ Loading CHIRPS (chunked)...")
-        ds_p = xr.open_dataset(self.chirps, chunks={'time': 12, 'latitude': 200, 'longitude': 200})
+        ds_p = xr.open_dataset(
+            self.chirps, 
+            chunks={
+                'time': self.chunk_size['time'], 
+                'latitude': self.chunk_size['latitude'], 
+                'longitude': self.chunk_size['longitude']
+            }
+        )
+        
+        # Find precipitation variable (flexible naming)
         pvar = next(v for v in ds_p.data_vars if "precip" in v.lower())
         ds_p = ds_p[[pvar]].rename({pvar: "precipitation"})
         
         # Spatial subset (lazy operation)
         ds_p = self._spatial_subset(ds_p, bbox)
         print(f"   Subset shape: {dict(ds_p.sizes)}")
+        
+        return ds_p
 
-        # ------------------- ERA5 ---------------------
+    # --------------------------------------------------------------
+    def load_era5(self, bbox):
+        """Load and process ERA5 land data"""
         print("\n💧 Loading ERA5 (chunked)...")
-        ds_e = xr.open_dataset(self.era5, chunks={'time': 12})
+        ds_e = xr.open_dataset(self.era5, chunks={'time': self.chunk_size['time']})
         
         # Safe renaming
         rename_map = {}
@@ -109,12 +183,21 @@ class Module0Pipeline:
         # Spatial subset
         ds_e = self._spatial_subset(ds_e, bbox)
         print(f"   Subset shape: {dict(ds_e.sizes)}")
+        
+        return ds_e
 
-        # ------------------- MODIS --------------------
+    # --------------------------------------------------------------
+    def load_ndvi(self, bbox):
+        """Load and process MODIS NDVI data"""
         print("\n🛰️ Loading MODIS NDVI (chunked)...")
         files = sorted(self.modis.glob("*.nc"))
-        ds_n = xr.open_mfdataset(files, combine="by_coords", chunks={'time': 12})
         
+        if not files:
+            raise FileNotFoundError(f"No NetCDF files found in {self.modis}")
+        
+        ds_n = xr.open_mfdataset(files, combine="by_coords", chunks={'time': self.chunk_size['time']})
+        
+        # Find NDVI variable (flexible naming)
         ndvi_var = next(v for v in ds_n.data_vars if "ndvi" in v.lower())
         ds_n = ds_n[[ndvi_var]].rename({ndvi_var: "ndvi"})
         
@@ -124,42 +207,47 @@ class Module0Pipeline:
         print("   ⏳ Resampling to monthly...")
         ds_n = ds_n.resample(time="1MS").mean()
         print(f"   Subset shape: {dict(ds_n.sizes)}")
+        
+        return ds_n
 
-        # ------------------- STANDARDIZE COORDINATES --------------------
-        print("\n📐 Standardizing coordinate names...")
-        
-        def rename_coords(dataset):
-            """Ensure consistent lat/lon naming"""
-            mapping = {}
-            if 'lat' in dataset.coords: 
-                mapping['lat'] = 'latitude'
-            if 'lon' in dataset.coords: 
-                mapping['lon'] = 'longitude'
-            return dataset.rename(mapping) if mapping else dataset
-        
-        ds_p = rename_coords(ds_p)
-        ds_e = rename_coords(ds_e)
-        ds_n = rename_coords(ds_n)
+    # --------------------------------------------------------------
+    def run(self):
+        """Execute the complete data cube creation pipeline"""
+        print("\n🚀 MODULE 0 – ASAL DATA CUBE")
+        print("=" * 60)
+
+        # Load boundary and get bbox
+        gdf = gpd.read_file(self.boundary).to_crs("EPSG:4326")
+        bbox = self._get_bbox(gdf)
+        print(f"📍 Study area: {bbox['lat_min']:.2f}°-{bbox['lat_max']:.2f}°N, "
+              f"{bbox['lon_min']:.2f}°-{bbox['lon_max']:.2f}°E")
+
+        # Load datasets
+        ds_p = self.load_precipitation(bbox)
+        ds_e = self.load_era5(bbox)
+        ds_n = self.load_ndvi(bbox)
+
+        # Standardize coordinates
+        print("\n🔄 Standardizing coordinate names...")
+        ds_p = self._rename_coords(ds_p)
+        ds_e = self._rename_coords(ds_e)
+        ds_n = self._rename_coords(ds_n)
 
         # Get reference grid from CHIRPS (highest spatial resolution)
         target_lat = ds_p.latitude
         target_lon = ds_p.longitude
 
-        # ------------------- ALIGN TO CHIRPS GRID --------------------
+        # Align to CHIRPS grid
         print("🔗 Aligning to CHIRPS grid (bilinear interpolation)...")
-        
-        # Interpolate ERA5 to CHIRPS grid (linear for continuous variables)
         ds_e = ds_e.interp(latitude=target_lat, longitude=target_lon, method="linear")
-        
-        # Interpolate MODIS to CHIRPS grid (linear for NDVI continuity)
         ds_n = ds_n.interp(latitude=target_lat, longitude=target_lon, method="linear")
 
-        # ------------------- MERGE --------------------
+        # Merge datasets
         print("🔗 Merging datasets...")
         ds = xr.merge([ds_p, ds_e, ds_n], join="inner")
         print(f"   Merged shape: {dict(ds.sizes)}")
 
-        # ------------------- CLEAN DATA -------------------
+        # Clean data
         print("\n🧹 Cleaning data...")
         ds["precipitation"] = ds["precipitation"].clip(min=0)
         ds["potential_evaporation"] = np.abs(ds["potential_evaporation"])
@@ -169,12 +257,11 @@ class Module0Pipeline:
         for v in ds.data_vars:
             ds[v] = ds[v].astype("float32")
 
-        # ------------------- RECHUNK FOR EXPORT -------------------
+        # Rechunk for export
         t_size = ds.sizes["time"]
         y_size = ds.sizes["latitude"]
         x_size = ds.sizes["longitude"]
 
-        # Optimal chunks for writing
         chunk_t = min(12, t_size)
         chunk_y = min(100, y_size)
         chunk_x = min(100, x_size)
@@ -182,7 +269,7 @@ class Module0Pipeline:
         print(f"📦 Rechunking for export: time={chunk_t}, lat={chunk_y}, lon={chunk_x}")
         ds = ds.chunk({"time": chunk_t, "latitude": chunk_y, "longitude": chunk_x})
 
-        # ------------------- ENCODING -------------------
+        # Encoding
         encoding = {}
         for v in ds.data_vars:
             encoding[v] = {
@@ -196,21 +283,21 @@ class Module0Pipeline:
         for coord in ["latitude", "longitude", "time"]:
             encoding[coord] = {"_FillValue": None}
 
-        # ------------------- EXPORT -------------------
-        out = self.output_dir / "module0_asal_datacube.nc"
+        # Export
+        out = self.output_dir / self.output_filename
         print(f"\n💾 Writing to: {out}")
         print("   ⚠️  This will take several minutes for large datasets...")
         
         with ProgressBar():
             ds.to_netcdf(out, encoding=encoding, engine="netcdf4")
 
-        # ------------------- SUMMARY -------------------
+        # Summary
         file_size = out.stat().st_size / (1024**2)
         print("\n" + "="*60)
         print("✅ MODULE 0 COMPLETE - CAUSAL DATA CUBE READY")
         print("="*60)
         print(f"📊 Dimensions: {dict(ds.sizes)}")
-        print(f"📁 Variables (Causal Registry):")
+        print(f"📋 Variables (Causal Registry):")
         print(f"   • precipitation (Stressor)")
         print(f"   • potential_evaporation (Stressor)")
         print(f"   • soil_moisture (Mediator)")
@@ -220,16 +307,143 @@ class Module0Pipeline:
         print(f"                   {float(ds.longitude.min()):.2f}° to {float(ds.longitude.max()):.2f}°E")
         print(f"🔬 Interpolation: Bilinear (suitable for continuous variables)")
         print(f"💾 File size: {file_size:.1f} MB")
-        print(f"📍 Saved to: {out}")
+        print(f"📁 Saved to: {out}")
         print(f"\n🎯 Ready for Module 1: Causal Discovery")
         print("="*60)
+        
+        return ds
+
+
+# ------------------------------------------------------------------
+def create_data_cube(chirps_path=None, era5_path=None, modis_dir=None, 
+                     boundary_path=None, output_dir=None, **kwargs):
+    """
+    Convenience function to create data cube
+    
+    Parameters:
+    -----------
+    chirps_path : str or Path, optional
+        Path to CHIRPS precipitation file
+    era5_path : str or Path, optional
+        Path to ERA5 land data file
+    modis_dir : str or Path, optional
+        Directory containing MODIS NDVI files
+    boundary_path : str or Path, optional
+        Path to boundary GeoJSON file
+    output_dir : str or Path, optional
+        Output directory
+    **kwargs : additional arguments
+        Additional arguments to pass to Module0Pipeline
+    """
+    # Use defaults if not provided
+    chirps_path = chirps_path or DEFAULT_CHIRPS
+    era5_path = era5_path or DEFAULT_ERA5
+    modis_dir = modis_dir or DEFAULT_MODIS
+    boundary_path = boundary_path or DEFAULT_BOUNDARY
+    output_dir = output_dir or DEFAULT_OUTPUT
+    
+    pipeline = Module0Pipeline(
+        chirps_path=chirps_path,
+        era5_path=era5_path,
+        modis_dir=modis_dir,
+        boundary_path=boundary_path,
+        output_dir=output_dir,
+        **kwargs
+    )
+    
+    return pipeline.run()
+
 
 # ------------------------------------------------------------------
 if __name__ == "__main__":
-    Module0Pipeline(
-        chirps_path="data/raw/chirps/monthly/chirps-v2.0.monthly.nc",
-        era5_path="data/raw/era5_land/data_stream-moda.nc",
-        modis_dir="data/raw/modis_ndvi/ndvi",
-        boundary_path="data/raw/boundaries/asal_boundary.geojson",
-        output_dir="data/processed/module0"
-    ).run()
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description='Create unified climate and vegetation data cube'
+    )
+    parser.add_argument(
+        '--project-root',
+        type=str,
+        help='Base project directory (default: current directory or GREENSCOPE_PROJECT_ROOT env var)'
+    )
+    parser.add_argument(
+        '--chirps',
+        type=str,
+        help='Path to CHIRPS precipitation NetCDF file'
+    )
+    parser.add_argument(
+        '--era5',
+        type=str,
+        help='Path to ERA5 land data NetCDF file'
+    )
+    parser.add_argument(
+        '--modis',
+        type=str,
+        help='Directory containing MODIS NDVI NetCDF files'
+    )
+    parser.add_argument(
+        '--boundary',
+        type=str,
+        help='Path to study area boundary GeoJSON file'
+    )
+    parser.add_argument(
+        '--output-dir',
+        type=str,
+        help='Output directory for data cube'
+    )
+    parser.add_argument(
+        '--output-filename',
+        type=str,
+        default='module0_asal_datacube.nc',
+        help='Output NetCDF filename (default: module0_asal_datacube.nc)'
+    )
+    parser.add_argument(
+        '--chunk-time',
+        type=int,
+        default=12,
+        help='Chunk size for time dimension (default: 12)'
+    )
+    parser.add_argument(
+        '--chunk-lat',
+        type=int,
+        default=200,
+        help='Chunk size for latitude dimension (default: 200)'
+    )
+    parser.add_argument(
+        '--chunk-lon',
+        type=int,
+        default=200,
+        help='Chunk size for longitude dimension (default: 200)'
+    )
+    
+    args = parser.parse_args()
+    
+    # Update project root if provided
+    if args.project_root:
+        global PROJECT_ROOT, DEFAULT_CHIRPS, DEFAULT_ERA5, DEFAULT_MODIS
+        global DEFAULT_BOUNDARY, DEFAULT_OUTPUT
+        
+        PROJECT_ROOT = Path(args.project_root)
+        DEFAULT_CHIRPS = PROJECT_ROOT / "data" / "raw" / "chirps" / "monthly" / "chirps-v2.0.monthly.nc"
+        DEFAULT_ERA5 = PROJECT_ROOT / "data" / "raw" / "era5_land" / "data_stream-moda.nc"
+        DEFAULT_MODIS = PROJECT_ROOT / "data" / "raw" / "modis_ndvi" / "ndvi"
+        DEFAULT_BOUNDARY = PROJECT_ROOT / "data" / "raw" / "boundaries" / "asal_boundary.geojson"
+        DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "processed" / "module0"
+    
+    # Custom chunk sizes
+    chunk_size = {
+        'time': args.chunk_time,
+        'latitude': args.chunk_lat,
+        'longitude': args.chunk_lon
+    }
+    
+    # Run pipeline
+    create_data_cube(
+        chirps_path=args.chirps,
+        era5_path=args.era5,
+        modis_dir=args.modis,
+        boundary_path=args.boundary,
+        output_dir=args.output_dir,
+        output_filename=args.output_filename,
+        chunk_size=chunk_size
+    )
