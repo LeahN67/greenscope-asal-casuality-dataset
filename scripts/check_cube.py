@@ -22,12 +22,16 @@ from gs_common import FINAL_CUBE
 # variable: (hard minimum, hard maximum, description of a plausible median)
 RANGES = {
     "precipitation": (0, 2000, (1, 200)),
-    "potential_evaporation": (0, 25, (2, 12)),
+    # ERA5-Land potential evaporation has persistent local highs of 25 to 45 mm/day in the source product;
+    # the hard limit catches unit and sign errors (which give values near 0.01 or above 1000), and values
+    # above SOFT_MAX are reported as a warning with their share.
+    "potential_evaporation": (0, 60, (2, 12)),
     "soil_moisture": (-1e-6, 0.8, (0.02, 0.45)),
     "ndvi": (-0.2, 1.0, (0.1, 0.7)),
     "enso_nino34": (-5, 5, (-1.5, 1.5)),
     "iod_dmi": (-3, 3, (-1.5, 1.5)),
 }
+SOFT_MAX = {"potential_evaporation": 25}
 
 
 def main():
@@ -75,6 +79,9 @@ def main():
             say("WARN", desc + "  (median or distribution unusual)")
         else:
             say("PASS", desc)
+        if var in SOFT_MAX and (f > SOFT_MAX[var]).any():
+            say("WARN", f"{var}: {(f > SOFT_MAX[var]).mean():.2%} of cell-months above {SOFT_MAX[var]} "
+                        f"{ds[var].attrs.get('units', '')} (kept as delivered by the source)")
         if ds[var].attrs.get("missing_months"):
             say("WARN", f"{var}: months without a value: {ds[var].attrs['missing_months']}")
 
@@ -100,8 +107,25 @@ def main():
     else:
         say("WARN", "ndvi_good_fraction: not present (no VI_Quality in the NDVI inputs)")
 
+    # A sudden shift in a source product (a level change lasting many months) passes every range check.
+    # Flag any run of 6 or more consecutive months whose area mean is more than 2 standard deviations
+    # from that calendar month's mean.
+    for var in ("precipitation", "potential_evaporation", "soil_moisture", "ndvi"):
+        if var not in ds.data_vars:
+            continue
+        s = ds[var].mean(["latitude", "longitude"]).to_series()
+        g = s.groupby(s.index.month)
+        z = ((s - g.transform("mean")) / g.transform("std")).abs() > 2
+        runs = z.astype(int).groupby((~z).cumsum()).cumsum()
+        run = int(runs.max())
+        if run >= 6:
+            end = runs.values.argmax()
+            start = pd.Timestamp(runs.index[end - run + 1])
+            say("WARN", f"{var}: {run} consecutive months more than 2 SD from the monthly mean "
+                        f"(from {start:%Y-%m}); check the source for a discontinuity")
+
     for k in ("mask_rule", "boundary_cells_kept", "boundary_cells_dropped", "qc_ndvi_pixels_out_of_range", "qc_precipitation_negative_cells",
-              "qc_pev_positive_cells_before_sign_reversal", "ndvi_regridding"):
+              "qc_pev_positive_cells_before_sign_reversal", "ndvi_regridding", "era5_land_accumulated_fix"):
         if k in ds.attrs:
             lines.append(f"INFO  {k}: {ds.attrs[k]}")
 

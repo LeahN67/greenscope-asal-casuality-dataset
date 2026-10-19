@@ -184,6 +184,8 @@ def test_pipeline_end_to_end(tmp_path):
         assert all(f[v].attrs.get(k) for k in ("units", "long_name", "causal_layer", "causal_role")), v
     mask = f.asal_mask.values
     assert 0 < mask.sum() < mask.size                                  # triangle: some cells outside
+    has_data = np.isfinite(f.precipitation.values).any(axis=0)
+    assert (mask[has_data] == 1).all()                                 # every retained cell is inside the mask
     for v in ("precipitation", "potential_evaporation", "soil_moisture", "ndvi", "ndvi_good_fraction"):
         assert np.isnan(f[v].values[:, mask == 0]).all(), f"{v} not masked"
         assert np.isfinite(f[v].values[:, mask == 1]).mean() > 0.8, f"{v} mostly missing inside"
@@ -298,3 +300,47 @@ def test_boundary_cells_and_sensitivity_table(tmp_path):
     assert "centre-in-polygon" in f.attrs["mask_rule"]
     t3 = pd.read_csv(root / "data/processed/module0/figures/table3_ndvi_quality.csv")
     assert len(t3) == 3 and t3.cell_months_used_pct.iloc[0] == 100
+
+
+def test_foreign_proj_variables_are_ignored(tmp_path):
+    env = dict(os.environ, PROJ_LIB=str(tmp_path / "postgis" / "proj"), PROJ_DATA=str(tmp_path / "other"))
+    code = "import proj_guard, os, rasterio.crs; print(os.environ.get('PROJ_LIB'), rasterio.crs.CRS.from_epsg(4326).to_epsg())"
+    r = subprocess.run([sys.executable, "-c", code], cwd=REPO / "scripts", env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout.split() == ["None", "4326"], r.stdout + r.stderr
+    assert "ignoring PROJ_LIB" in r.stderr
+
+
+# ------------------------------------------------------------------ ERA5-Land correction
+def test_era5_fix_replaces_only_flagged_months():
+    import fetch_era5 as fe
+    months = pd.date_range("2022-01-01", "2024-06-01", freq="MS")
+    lat, lon = np.array([1.0, 0.9]), np.array([36.0, 36.1])
+    good = -np.full((len(months), 2, 2), 0.009, "float32")
+    bad = good.copy()
+    window = (months >= "2022-09-01") & (months <= "2024-02-01")
+    bad[window] = -0.0045                                   # the halving seen in the CDS product
+    ds = xr.Dataset({"pev": (("valid_time", "latitude", "longitude"), bad),
+                     "swvl1": (("valid_time", "latitude", "longitude"), np.full_like(bad, 0.2))},
+                    coords={"valid_time": months, "latitude": lat, "longitude": lon})
+    fix = xr.Dataset({"pev": (("valid_time", "latitude", "longitude"), good)},
+                     coords={"valid_time": months, "latitude": lat, "longitude": lon})
+    out, replaced = fe.apply_fix(ds, fix)
+    assert replaced[0] == "2022-09" and replaced[-1] == "2024-02" and len(replaced) == 18
+    assert np.allclose(out.pev.values, good)
+    assert np.allclose(out.swvl1.values, 0.2)
+    assert "greenscope_accumulated_fix" in out.attrs
+
+
+def test_cube_refuses_unpatched_era5_in_flagged_period(tmp_path):
+    import data_cube as dc
+    months = pd.date_range("2022-06-01", "2022-12-01", freq="MS")
+    f = tmp_path / "era5.nc"
+    shape = (len(months), 3, 3)
+    xr.Dataset({"pev": (("valid_time", "latitude", "longitude"), -np.full(shape, 0.008, "float32")),
+                "swvl1": (("valid_time", "latitude", "longitude"), np.full(shape, 0.2, "float32"))},
+               coords={"valid_time": months, "latitude": [1.0, 0.9, 0.8], "longitude": [36.0, 36.1, 36.2]}
+               ).to_netcdf(f)
+    p = dc.Module0Pipeline.__new__(dc.Module0Pipeline)
+    p.era5 = f
+    with pytest.raises(SystemExit, match="ECMWF"):
+        p.load_era5((35.9, 0.7, 36.3, 1.1))

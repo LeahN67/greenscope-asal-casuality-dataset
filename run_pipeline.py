@@ -57,7 +57,11 @@ def main():
         if name == "integrate" and args.allow_missing_index:
             cmd.append("--allow-missing-index")
         print(f"\n{'=' * 70}\n{name}: {' '.join(cmd[1:])}\n{'=' * 70}")
-        if subprocess.run(cmd).returncode != 0:
+        try:
+            code = subprocess.run(cmd).returncode
+        except KeyboardInterrupt:
+            sys.exit(f"\nStopped by you at step '{name}'. Rerun with --from {name} to continue.")
+        if code != 0:
             sys.exit(f"\nStopped: step '{name}' failed. Fix the problem above, then rerun with --from {name}")
     print("\nPipeline complete. Final cube: data/processed/module0/greenscope_final_causal_cube.nc")
 

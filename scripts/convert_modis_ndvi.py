@@ -14,6 +14,8 @@ NDVI stays as stored integers (NDVI x 10000); data_cube.py applies the 0.0001 sc
 VI_Quality stays as the 16-bit flag word. Fill values become -9999 (NDVI) and 65535 (quality).
 Output: data/raw/modis_ndvi_monthly/ndvi/MODIS_NDVI_YYYYMMDD.nc
 """
+import proj_guard  # noqa: F401  (must come before any geospatial import)
+
 import argparse
 import re
 from datetime import datetime

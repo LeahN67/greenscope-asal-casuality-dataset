@@ -1,6 +1,6 @@
 # GreenScope ASAL Causal Data Cube
 
-A reproducible pipeline that builds a monthly, 0.05 degree climate and vegetation data cube for the 23 Arid and Semi-Arid Land (ASAL) counties of Kenya. It combines five public datasets on one grid and one monthly time axis, masked to the ASAL county polygons, and records a hypothesised driver, mediator and response ordering of the variables in the file itself. The cube is designed to support causal discovery and lagged analysis of how ocean-atmosphere drivers propagate through rainfall and soil moisture to vegetation.
+A reproducible pipeline that builds a monthly, 0.05 degree climate and vegetation data cube for the 23 Arid and Semi-Arid Land (ASAL) counties of Kenya. It combines five public environmental datasets, together with county boundary data, on one grid and one monthly time axis, masked to the ASAL county polygons, and records a hypothesised driver, mediator and response ordering of the variables in the file itself. The cube is designed to support causal discovery and lagged analysis of how ocean-atmosphere drivers propagate through rainfall and soil moisture to vegetation.
 
 The causal ordering is a structural prior that narrows which relationships are plausible. It does not by itself show that any relationship is causal.
 
@@ -69,7 +69,7 @@ Each step is a script you can also run on its own. Download steps skip files tha
 |---|---|---|
 | 1 | `scripts/create_asal_boundaries.py` | `data/raw/boundaries/asal_boundary.geojson` (23 counties, dissolved) |
 | 2 | `scripts/fetch_chirps.py` | `data/raw/chirps/monthly/chirps-v2.0.monthly.nc` (global, several GB) |
-| 3 | `scripts/fetch_era5.py` | `data/raw/era5_land/era5_land_monthly.nc` (2000-2025) |
+| 3 | `scripts/fetch_era5.py` | `data/raw/era5_land/era5_land_monthly.nc` (2000-2025, with September 2022 to February 2024 corrected; see below) |
 | 4 | `scripts/fetch_enso.py`, `scripts/fetch_iod.py` | `data/raw/enso/nino34.txt`, `data/raw/iod/dmi_noaa.txt` |
 | 5 | `scripts/fetch_modis_ndvi.py` | `data/raw/modis_ndvi_monthly/*.tif` (February 2000 to December 2025) |
 | 6 | `scripts/convert_modis_ndvi.py` | `data/raw/modis_ndvi_monthly/ndvi/*.nc` (NDVI and VI_Quality per date) |
@@ -95,7 +95,7 @@ The Dipole Mode Index is published with a lag, so its latest months are often mi
 
 ## Checking the result
 
-`check_cube.py` compares every variable with a plausible physical range and writes `cube_report.txt`. A FAIL means the cube should not be analysed until the cause is found. It also warns when the record is shorter than 120 months, which gives little statistical power for lagged causal analysis.
+`check_cube.py` compares every variable with a plausible physical range and writes `cube_report.txt`. A FAIL means the cube should not be analysed until the cause is found. It also warns when the record is shorter than 120 months, which gives little statistical power for lagged causal analysis, when potential evaporation exceeds 25 mm/day (values the source delivers in hot, windy lowlands; kept, but reported), and when the ASAL mean of any gridded variable stays more than two standard deviations from its calendar-month mean for six or more consecutive months. That last check catches level shifts in a source product, which pass every range check.
 
 The cube builder refuses NDVI values that pile up on a few codes. This is the signature of the MODIS VI_Quality layer having been converted in place of NDVI, a mistake that is easy to make because AppEEARS delivers both layers into the same folder.
 
@@ -105,8 +105,10 @@ The cube builder refuses NDVI values that pile up on a few codes. This is the si
 - **Regridding.** NDVI is the unweighted mean of all MODIS pixels whose centres fall in each 0.05 degree cell (about 36 pixels for 1 km data); pixel areas within a cell differ by less than 0.01%, so this is effectively an area-weighted mean. Both grids must be regular and monotonic, which the builder checks. ERA5-Land (0.1 degree) is coarser than the grid and is linearly interpolated onto it for alignment only; its effective resolution remains 0.1 degree.
 - **NDVI quality.** NDVI is not screened. Masking cloud-affected pixels would remove data mainly in rainy months, making the gaps depend on rainfall and biasing lagged analyses. Instead `ndvi_good_fraction` records, for every cell and month, the share of pixels whose VI_Quality flags mark them as good, so users can filter or weight observations themselves. `make_figures.py` reports how NDVI and the precipitation-to-NDVI lag change under no filtering, a 0.5 threshold and quality weighting (`table3_ndvi_quality.csv`).
 - **Time span.** Only months present in every input are kept. With the default downloads this is February 2000 to the latest month available in all sources.
-- **Potential evaporation.** ERA5-Land monthly means of accumulated variables are mean daily totals; the sign is reversed so evaporation is positive, and values are converted to mm/day.
-- **ENSO baseline.** The Nino 3.4 anomaly is computed from the ERSSTv5 absolute series against one fixed 1991-2020 calendar-month mean, the current WMO standard normal period. NOAA CPC's Oceanic Nino Index uses centred 30-year base periods updated every five years and is now based on ERSSTv6, and CPC's official monitoring uses the Relative Oceanic Nino Index (RONI). Values in the cube are therefore close to, but not identical with, published ONI or RONI values, and a fixed base period leaves any long-term warming trend in the anomaly.
+- **Potential evaporation.** ERA5-Land monthly means of accumulated variables are mean daily totals; the sign is reversed so evaporation is positive, and values are converted to mm/day. It is a potential rate from the land surface model and runs above reference evapotranspiration in hot, windy drylands; treat it as an index of atmospheric demand.
+- **ERA5-Land correction, September 2022 to February 2024.** ECMWF has documented that every accumulated variable in the ERA5-Land `monthly_averaged_reanalysis` product is wrong for these 18 months and will not be replaced ([ECMWF Forum](https://forum.ecmwf.int/t/issue-affecting-era5-land-monthly-averaged-reanalysis-for-the-period-september-2022-to-february-2024/2370)); potential evaporation drops to about half. `fetch_era5.py` downloads ECMWF's recommended replacement, the `monthly_averaged_reanalysis_by_hour_of_day` product at 00:00, for those months only, writes it into the file and records the change in the file attribute `greenscope_accumulated_fix`. If you already have an uncorrected file, running `python scripts/fetch_era5.py` corrects it in place. `data_cube.py` refuses an uncorrected file. Soil moisture is not accumulated and is unaffected.
+- **Inland water.** Lake Turkana and smaller water bodies inside the ASAL counties are part of the mask. Their cells have NDVI near zero and water-surface potential evaporation; exclude them with a threshold on long-term mean NDVI or an external water mask if needed.
+- **ENSO baseline.** The Nino 3.4 anomaly is computed from the ERSSTv5 absolute series against one fixed 1991-2020 calendar-month mean, the current WMO standard normal period. NOAA CPC's Oceanic Nino Index uses centred 30-year base periods updated every five years and is now based on ERSSTv6, and CPC's official monitoring uses the Relative Oceanic Nino Index (RONI). Values in the cube are therefore close to, but not identical with, published ONI or RONI values, and a fixed base period leaves any long-term warming trend in the anomaly. For analyses sensitive to long-term sea surface temperature trends, remove the linear trend from `enso_nino34`, use a rolling baseline, or interpret the variable as combining interannual variability with long-term tropical warming.
 - **Causal ordering.** ENSO and IOD are treated as external drivers, although they are themselves statistically related. Land management, grazing pressure and fire are not in the cube and act as unobserved confounders for any causal analysis.
 
 ## Exploratory analysis
@@ -119,7 +121,7 @@ The cube builder refuses NDVI values that pile up on a few codes. This is the si
 pytest -q tests
 ```
 
-The tests create small synthetic inputs in the same formats as the real downloads (NetCDF, AppEEARS GeoTIFFs with both NDVI and quality layers, NOAA PSL text files with headers, footers and -9999 codes) and run the pipeline end to end. They need no network access or credentials. They also check the two failure modes this pipeline previously had (index files parsed one year out of step, and quality codes converted as NDVI), that every variable is masked to the ASAL polygon, and that the NDVI area average counts every pixel once.
+The tests create small synthetic inputs in the same formats as the real downloads (NetCDF, AppEEARS GeoTIFFs with both NDVI and quality layers, NOAA PSL text files with headers, footers and -9999 codes) and run the pipeline end to end. They need no network access or credentials. They also check the two failure modes this pipeline previously had (index files parsed one year out of step, and quality codes converted as NDVI), that every variable is masked to the ASAL polygon, that the NDVI area average counts every pixel once, that the ERA5-Land correction replaces exactly the 18 flagged months, and that the cube builder refuses an uncorrected ERA5-Land file.
 
 ## Repository layout
 

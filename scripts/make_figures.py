@@ -21,6 +21,8 @@ Area means use cos(latitude) weights over cells inside the ASAL mask. Anomalies 
 calendar month over the full record. Correlations are Pearson coefficients on months where both
 series have values; n is reported with each, and lags with fewer than 12 paired months are not plotted.
 """
+import proj_guard  # noqa: F401  (must come before any geospatial import)
+
 import argparse
 from pathlib import Path
 
@@ -136,7 +138,8 @@ def main():
         ax.plot(s.index, s.values, color=SERIES_1, linewidth=1)
         if v in INDICES:
             ax.axhline(0, color=INK2, linewidth=0.6)
-        ax.set_title(("ASAL-mean " + LABELS[v][0].lower() + LABELS[v][1:]) if v in GRIDDED else LABELS[v], loc="left")
+        lab = LABELS[v] if LABELS[v][:2].isupper() else LABELS[v][0].lower() + LABELS[v][1:]   # keep "NDVI"
+        ax.set_title(("ASAL-mean " + lab) if v in GRIDDED else LABELS[v], loc="left")
     axes[-1].set_xlabel("Month")
     fig.tight_layout()
     fig.savefig(out / "fig2_timeseries.png")

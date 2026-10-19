@@ -6,6 +6,8 @@ Step 1. Build the study-area boundary: the 23 ASAL counties of Kenya, dissolved 
 
 Output: data/raw/boundaries/asal_boundary.geojson
 """
+import proj_guard  # noqa: F401  (must come before any geospatial import)
+
 import argparse
 import json
 from difflib import get_close_matches

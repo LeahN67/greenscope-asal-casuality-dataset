@@ -22,11 +22,7 @@ What it does, in order:
 Output: data/processed/module0/module0_asal_datacube.nc
         data/processed/module0/ndvi_input_files.csv   (SHA-256 of every NDVI input file)
 """
-import os
-
-import pyproj
-
-os.environ.setdefault("PROJ_LIB", pyproj.datadir.get_data_dir())
+import proj_guard  # noqa: F401  (must come before any geospatial import)
 
 import argparse
 import csv
@@ -42,7 +38,7 @@ import shapely
 import xarray as xr
 
 from gs_common import (ANCILLARY, BOUNDARY, CAUSAL_REGISTRY, CHIRPS, CHIRPS_URL, CUBE, ERA5,
-                       ERA5_LEGACY, ERA5_REQUEST, MODIS_NC, MODIS_TASK, sha256_file, tag_causal_role)
+                       ERA5_BAD_MONTHS, ERA5_FIX_ATTR, ERA5_LEGACY, ERA5_REQUEST, MODIS_NC, MODIS_TASK, sha256_file, tag_causal_role)
 
 KM_PER_DEGREE = 111.32
 
@@ -195,6 +191,17 @@ class Module0Pipeline:
         if missing:
             raise SystemExit(f"ERA5-Land file lacks {missing}; variables present: {list(ds.data_vars)}")
         check_monthly(ds, "ERA5-Land")
+        months = pd.DatetimeIndex(ds.time.values).strftime("%Y-%m")
+        affected = (months >= ERA5_BAD_MONTHS[0]) & (months <= ERA5_BAD_MONTHS[1])
+        if affected.any() and ERA5_FIX_ATTR not in ds.attrs:
+            raise SystemExit(
+                f"The ERA5-Land file covers {ERA5_BAD_MONTHS[0]} to {ERA5_BAD_MONTHS[1]}, where ECMWF's monthly "
+                "averaged product holds wrong values for accumulated variables (potential evaporation drops "
+                "to about half). Replace those months with: python scripts/fetch_era5.py   (it detects the "
+                "unpatched file and downloads only the correction), then rerun this step.")
+        self.era5_fix = ds.attrs.get(ERA5_FIX_ATTR)
+        if self.era5_fix:
+            print(f"      {self.era5_fix}")
         ds = self._subset(ds[["potential_evaporation", "soil_moisture"]], bbox)
         ds["time"] = pd.DatetimeIndex(ds.time.values).to_period("M").to_timestamp()
         print(f"      subset {dict(ds.sizes)}")
@@ -261,6 +268,8 @@ class Module0Pipeline:
             "source_chirps": describe_input(self.chirps, self.hash_inputs) + f"; {CHIRPS_URL}",
             "source_era5_land": describe_input(self.era5, self.hash_inputs),
         }
+        if getattr(self, "era5_fix", None):
+            attrs["era5_land_accumulated_fix"] = self.era5_fix
         if ERA5_REQUEST.exists() and self.era5.resolve().parent == ERA5_REQUEST.parent:
             attrs["source_era5_land_request"] = json.dumps(json.loads(ERA5_REQUEST.read_text()), separators=(",", ":"))
         files = sorted(self.modis.glob("*.nc"))

@@ -11,7 +11,7 @@ pyproj>=3.6
 rioxarray>=0.15
 rasterio>=1.3
 requests>=2.31
-cdsapi>=0.7.2              # ERA5-Land download (Copernicus CDS)
+cdsapi>=0.7.2              # ERA5-Land download (Copernicus CDS; accept the current CDS terms of use first)
 matplotlib>=3.8            # figures for the data article
 
 # Exploratory analysis (eda/)

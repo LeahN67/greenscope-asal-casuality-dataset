@@ -5,6 +5,8 @@ All scripts resolve paths from the project root, which is the current directory 
 the GREENSCOPE_PROJECT_ROOT environment variable is set. Run every script from the
 repository root.
 """
+import proj_guard  # noqa: F401
+
 import csv
 import hashlib
 import os
@@ -28,6 +30,12 @@ ERA5_DIR = RAW / "era5_land"
 ERA5 = ERA5_DIR / "era5_land_monthly.nc"
 ERA5_LEGACY = ERA5_DIR / "data_stream-moda.nc"      # name used by earlier manual downloads
 ERA5_REQUEST = ERA5_DIR / "era5_land_monthly.request.json"   # exact CDS request, written by fetch_era5.py
+# ECMWF known issue: in the ERA5-Land "monthly_averaged_reanalysis" product, accumulated variables
+# (potential evaporation among them) are wrong for September 2022 to February 2024 and will not be
+# replaced. ECMWF's workaround is the "monthly averaged reanalysis by hour of day" product at 00:00.
+# https://forum.ecmwf.int/t/issue-affecting-era5-land-monthly-averaged-reanalysis-for-the-period-september-2022-to-february-2024/2370
+ERA5_BAD_MONTHS = ("2022-09", "2024-02")
+ERA5_FIX_ATTR = "greenscope_accumulated_fix"
 ENSO = RAW / "enso" / "nino34.txt"
 IOD = RAW / "iod" / "dmi_noaa.txt"
 MODIS_DIR = RAW / "modis_ndvi_monthly"               # AppEEARS GeoTIFFs land here

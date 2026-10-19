@@ -15,6 +15,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 green_env/
+green_asal/
 venv/
 .venv/
 
@@ -22,6 +23,7 @@ venv/
 reports/
 outputs/
 CHANGES.md
+diag_*.py
 
 # Editors and OS
 .vscode/

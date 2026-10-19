@@ -16,6 +16,8 @@ Credentials: NASA Earthdata login. Set EARTHDATA_USERNAME and EARTHDATA_PASSWORD
 
 Output: data/raw/modis_ndvi_monthly/*.tif   (task id in data/raw/modis_ndvi_monthly/task_id.txt)
 """
+import proj_guard  # noqa: F401  (must come before any geospatial import)
+
 import argparse
 import getpass
 import json
@@ -81,7 +83,8 @@ def submit(headers, product, layer, start, end):
 
 
 def wait(headers, task_id, interval=120):
-    print("   waiting for AppEEARS to process the task (often hours; Ctrl+C is safe, then use --resume)")
+    print("   waiting for AppEEARS to process the task (often hours). Ctrl+C is safe: the task keeps running;\n"
+          "   rerun the same command later and it continues this task.")
     start = time.time()
     while True:
         try:
@@ -102,7 +105,7 @@ def wait(headers, task_id, interval=120):
 def download(headers, task_id):
     r = requests.get(f"{API}/bundle/{task_id}", headers=headers, timeout=120)
     if r.status_code != 200:
-        raise SystemExit(f"Bundle not available yet ({r.status_code}); try --resume later")
+        raise SystemExit(f"Bundle not available yet ({r.status_code}); rerun the same command later")
     files = [f for f in r.json().get("files", []) if f["file_name"].endswith(".tif")]
     print(f"   {len(files)} GeoTIFFs in bundle")
     failed = 0
@@ -130,7 +133,7 @@ def download(headers, task_id):
                 else:
                     time.sleep(2 * 2 ** attempt)
     if failed:
-        raise SystemExit(f"{failed} files failed; rerun with --resume to fetch them")
+        raise SystemExit(f"{failed} files failed; rerun the same command to fetch them")
     print(f"   all files in {MODIS_DIR}")
 
 
@@ -156,11 +159,14 @@ def main():
         check_layer(args.product, args.layer)
         task_id = submit(headers, args.product, args.layer, args.start, args.end)
         if args.no_wait:
-            print("   rerun later with --resume")
+            print("   rerun the same command later to wait for and download it")
             return
     wait(headers, task_id)
     download(headers, task_id)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        raise SystemExit("\n   stopped by you. The AppEEARS task keeps running; rerun the same command to continue it.")
