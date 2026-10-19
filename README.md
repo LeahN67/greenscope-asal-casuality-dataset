@@ -26,8 +26,8 @@ Every analysis variable carries `units`, `long_name`, `causal_layer` and `causal
 ## Quick start
 
 ```bash
-git clone https://github.com/LeahN67/greenscope-asal-casuality-dataset.git
-cd greenscope-asal-casuality-dataset
+git clone https://github.com/LeahN67/greenscope-asal-causality-dataset.git
+cd greenscope-asal-causality-dataset
 python -m venv venv
 # Windows: venv\Scripts\activate      Linux/macOS: source venv/bin/activate
 pip install -r requirements.txt
@@ -149,7 +149,7 @@ Each source keeps its own licence and citation requirements.
 
 ## Citation
 
-Njuguna, L. H. (2026). GreenScope ASAL Causal Data Cube: pipeline for a causally structured climate and vegetation data cube for Kenya's Arid and Semi-Arid Lands. GitHub. https://github.com/LeahN67/greenscope-asal-casuality-dataset
+Njuguna, L. H. (2026). GreenScope ASAL Causal Data Cube: pipeline for a causally structured climate and vegetation data cube for Kenya's Arid and Semi-Arid Lands. GitHub. https://github.com/LeahN67/greenscope-asal-causality-dataset
 
 ## License
 
