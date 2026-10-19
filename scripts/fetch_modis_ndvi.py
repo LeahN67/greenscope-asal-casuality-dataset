@@ -25,10 +25,9 @@ import time
 import geopandas as gpd
 import requests
 
-from gs_common import BOUNDARY, MODIS_DIR, record_download
+from gs_common import BOUNDARY, MODIS_DIR, MODIS_TASK as TASK_FILE, record_download
 
 API = "https://appeears.earthdatacloud.nasa.gov/api"
-TASK_FILE = MODIS_DIR / "task_id.txt"
 
 
 def login():
@@ -73,6 +72,10 @@ def submit(headers, product, layer, start, end):
     task_id = r.json()["task_id"]
     MODIS_DIR.mkdir(parents=True, exist_ok=True)
     TASK_FILE.write_text(task_id)
+    (MODIS_DIR / "request.json").write_text(json.dumps(
+        {"task_id": task_id, "product": product, "layer": layer, "start": start, "end": end,
+         "area": "ASAL county polygon (data/raw/boundaries/asal_boundary.geojson)",
+         "output": "geotiff, geographic projection"}, indent=1))
     print(f"   task submitted: {task_id}  (saved to {TASK_FILE})")
     return task_id
 

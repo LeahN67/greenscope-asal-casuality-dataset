@@ -11,9 +11,7 @@ Output: data/raw/iod/dmi_noaa.txt
 """
 import argparse
 
-from gs_common import IOD, download_with_resume, record_download
-
-URL = "https://psl.noaa.gov/data/timeseries/month/data/dmi.had.long.data"
+from gs_common import IOD, IOD_URL as URL, download_with_resume, record_download
 
 
 def main():

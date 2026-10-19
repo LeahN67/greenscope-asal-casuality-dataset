@@ -16,6 +16,7 @@ Steps:
   7 data_cube    data_cube.py                gridded cube on the CHIRPS grid
   8 integrate    causal_integration.py       add ENSO and IOD
   9 check        check_cube.py               plausibility report
+ 10 figures      make_figures.py             figures, Table 2 and numbers for the data article
 
 The pipeline stops at the first step that fails.
 """
@@ -36,6 +37,7 @@ STEPS = [
     ("data_cube", "data_cube.py", False),
     ("integrate", "causal_integration.py", False),
     ("check", "check_cube.py", False),
+    ("figures", "make_figures.py", False),
 ]
 
 

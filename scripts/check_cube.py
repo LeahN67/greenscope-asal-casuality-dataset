@@ -58,14 +58,17 @@ def main():
             say("FAIL", f"{var}: missing from the cube")
             continue
         v = ds[var].values.astype("float64")
+        if "asal_mask" in ds and v.ndim == 3:
+            v = v[:, ds["asal_mask"].values == 1]          # judge gridded variables inside the ASALs only
         nan = float(np.isnan(v).mean())
         f = v[np.isfinite(v)]
         if f.size == 0:
             say("FAIL", f"{var}: no valid values")
             continue
         q = np.percentile(f, [0, 50, 100])
+        where = " inside ASAL" if "asal_mask" in ds and ds[var].ndim == 3 else ""
         desc = (f"{var}: min {q[0]:.3f} median {q[1]:.3f} max {q[2]:.3f} "
-                f"[{ds[var].attrs.get('units', '?')}], missing {nan:.1%}, role: {ds[var].attrs.get('causal_role', '?')}")
+                f"[{ds[var].attrs.get('units', '?')}], missing{where} {nan:.1%}, role: {ds[var].attrs.get('causal_role', '?')}")
         if q[0] < lo or q[2] > hi:
             say("FAIL", desc + f"  (outside {lo}..{hi})")
         elif not mlo <= q[1] <= mhi or (var == "ndvi" and (np.abs(f - q[1]) < 0.005).mean() > 0.25):
@@ -74,6 +77,33 @@ def main():
             say("PASS", desc)
         if ds[var].attrs.get("missing_months"):
             say("WARN", f"{var}: months without a value: {ds[var].attrs['missing_months']}")
+
+    if "asal_mask" in ds:
+        m = ds["asal_mask"].values
+        say("PASS" if m.sum() > 0 else "FAIL",
+            f"asal_mask: {int(m.sum()):,} of {m.size:,} cells inside the ASAL polygon "
+            f"(about {ds.attrs.get('asal_area_km2', '?')} km2); extent: {ds.attrs.get('spatial_extent', '?')}")
+        if "masked" in ds.attrs.get("spatial_extent", "") or "inside" in ds.attrs.get("spatial_extent", ""):
+            outside = ds["precipitation"].values[:, m == 0]
+            say("PASS" if np.isnan(outside).all() else "FAIL", "cells outside the ASAL polygon are missing in every variable")
+    else:
+        say("WARN", "asal_mask: not present (cube built by an older version)")
+
+    if "ndvi_good_fraction" in ds:
+        g = ds["ndvi_good_fraction"].values
+        g = g[np.isfinite(g)]
+        if g.size and (g.min() < 0 or g.max() > 1):
+            say("FAIL", f"ndvi_good_fraction outside 0..1 ({g.min():.3f} to {g.max():.3f})")
+        elif g.size:
+            say("PASS" if np.median(g) >= 0.5 else "WARN",
+                f"ndvi_good_fraction: median {np.median(g):.2f}; share of cell-months below 0.5: {(g < 0.5).mean():.1%}")
+    else:
+        say("WARN", "ndvi_good_fraction: not present (no VI_Quality in the NDVI inputs)")
+
+    for k in ("qc_ndvi_pixels_out_of_range", "qc_precipitation_negative_cells",
+              "qc_pev_positive_cells_before_sign_reversal", "ndvi_regridding"):
+        if k in ds.attrs:
+            lines.append(f"INFO  {k}: {ds.attrs[k]}")
 
     report = cube.with_name("cube_report.txt")
     report.write_text("\n".join(lines) + "\n")

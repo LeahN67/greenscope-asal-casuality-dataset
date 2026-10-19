@@ -10,9 +10,7 @@ Output: data/raw/enso/nino34.txt
 """
 import argparse
 
-from gs_common import ENSO, download_with_resume, record_download
-
-URL = "https://psl.noaa.gov/data/correlation/nina34.data"
+from gs_common import ENSO, ENSO_URL as URL, download_with_resume, record_download
 
 
 def main():

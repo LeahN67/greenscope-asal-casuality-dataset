@@ -115,7 +115,10 @@ def run_integration(cube=CUBE, enso=ENSO, iod=IOD, output=FINAL_CUBE, allow_miss
     out.attrs["history"] = (out.attrs.get("history", "") + "; causal_integration.py: Nino 3.4 converted to "
                             "anomaly, ENSO and DMI matched to cube months exactly").lstrip("; ")
 
-    encoding = {v: {"zlib": True, "complevel": 4, "_FillValue": -9999.0} for v in out.data_vars}
+    encoding = {v: {"zlib": True, "complevel": 4, "_FillValue": -9999.0}
+                for v in out.data_vars if out[v].dtype.kind == "f"}
+    encoding.update({v: {"zlib": True, "complevel": 4, "_FillValue": None}
+                     for v in out.data_vars if out[v].dtype.kind != "f"})
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     out.to_netcdf(output, encoding=encoding)
     print(f"   saved {output}  ({Path(output).stat().st_size / 1e6:.1f} MB)")

@@ -1,12 +1,12 @@
 # GreenScope ASAL Causal Data Cube
 
-A reproducible pipeline that builds a monthly, 0.05 degree climate and vegetation data cube for the 23 Arid and Semi-Arid Land (ASAL) counties of Kenya. It combines five public datasets on one grid and one monthly time axis, and records a hypothesised driver, mediator and response ordering of the variables in the file itself. The cube is designed to support causal discovery and lagged analysis of how ocean-atmosphere drivers propagate through rainfall and soil moisture to vegetation.
+A reproducible pipeline that builds a monthly, 0.05 degree climate and vegetation data cube for the 23 Arid and Semi-Arid Land (ASAL) counties of Kenya. It combines five public datasets on one grid and one monthly time axis, masked to the ASAL county polygons, and records a hypothesised driver, mediator and response ordering of the variables in the file itself. The cube is designed to support causal discovery and lagged analysis of how ocean-atmosphere drivers propagate through rainfall and soil moisture to vegetation.
 
 The causal ordering is a structural prior that narrows which relationships are plausible. It does not by itself show that any relationship is causal.
 
 ## What the pipeline produces
 
-`data/processed/module0/greenscope_final_causal_cube.nc`, a NetCDF4 file with six variables:
+`data/processed/module0/greenscope_final_causal_cube.nc`, a NetCDF4 file with six analysis variables and two ancillary variables:
 
 | Variable | Source | Units | Dimensions | Causal layer and role |
 |---|---|---|---|---|
@@ -15,11 +15,13 @@ The causal ordering is a structural prior that narrows which relationships are p
 | `precipitation` | CHIRPS v2.0 monthly | mm/month | time, latitude, longitude | B, local driver |
 | `potential_evaporation` | ERA5-Land monthly means | mm/day | time, latitude, longitude | B, local stressor |
 | `soil_moisture` | ERA5-Land volumetric soil water, layer 1 (0-7 cm) | m3 m-3 | time, latitude, longitude | B, mediator |
-| `ndvi` | MODIS MOD13A3 v061, monthly 1 km NDVI | 1 | time, latitude, longitude | C, response |
+| `ndvi` | MODIS MOD13A3 v061, monthly 1 km NDVI, averaged over all pixels in each cell | 1 | time, latitude, longitude | C, response |
+| `ndvi_good_fraction` | MODIS VI_Quality: share of the cell's pixels with good quality flags | 1 | time, latitude, longitude | ancillary (no causal role) |
+| `asal_mask` | 1 where the cell centre lies inside the ASAL polygon | 1 | latitude, longitude | ancillary (no causal role) |
 
 The two indices hold one regional value per month. xarray broadcasts them against the gridded variables automatically, so `cube.ndvi * cube.enso_nino34` works without reshaping.
 
-Every variable carries `units`, `long_name`, `causal_layer` and `causal_role` attributes. The file's global attributes list the input files with their sizes and SHA-256 checksums and the processing steps applied.
+Every analysis variable carries `units`, `long_name`, `causal_layer` and `causal_role` attributes. Grid cells outside the ASAL polygon are missing in every gridded variable (`--no-mask` keeps the full bounding box). The file's global attributes record the input files with their SHA-256 checksums, the source URLs, the exact ERA5-Land and AppEEARS requests, quality-control counts and the processing steps applied; `ndvi_input_files.csv` lists the checksum of every NDVI input file.
 
 ## Quick start
 
@@ -70,17 +72,18 @@ Each step is a script you can also run on its own. Download steps skip files tha
 | 3 | `scripts/fetch_era5.py` | `data/raw/era5_land/era5_land_monthly.nc` (2000-2025) |
 | 4 | `scripts/fetch_enso.py`, `scripts/fetch_iod.py` | `data/raw/enso/nino34.txt`, `data/raw/iod/dmi_noaa.txt` |
 | 5 | `scripts/fetch_modis_ndvi.py` | `data/raw/modis_ndvi_monthly/*.tif` (February 2000 to December 2025) |
-| 6 | `scripts/convert_modis_ndvi.py` | `data/raw/modis_ndvi_monthly/ndvi/*.nc` |
-| 7 | `scripts/data_cube.py` | `data/processed/module0/module0_asal_datacube.nc` |
+| 6 | `scripts/convert_modis_ndvi.py` | `data/raw/modis_ndvi_monthly/ndvi/*.nc` (NDVI and VI_Quality per date) |
+| 7 | `scripts/data_cube.py` | `data/processed/module0/module0_asal_datacube.nc`, `ndvi_input_files.csv` |
 | 8 | `scripts/causal_integration.py` | `data/processed/module0/greenscope_final_causal_cube.nc` |
 | 9 | `scripts/check_cube.py` | `data/processed/module0/cube_report.txt` |
+| 10 | `scripts/make_figures.py` | `data/processed/module0/figures/` (maps, time series, lag correlations, Table 2, `paper_numbers.txt`) |
 
 Every download is logged with its source, size and SHA-256 checksum in `data/raw/download_manifest.csv`. Downloads resume after interruption and retry with exponential backoff.
 
 Useful options:
 
 ```bash
-python run_pipeline.py --skip-download          # steps 6 to 9 only, on data already downloaded
+python run_pipeline.py --skip-download          # steps 6 to 10 only, on data already downloaded
 python run_pipeline.py --from data_cube         # restart from a given step
 python run_pipeline.py --allow-missing-index    # see "Index gaps" below
 python scripts/<script>.py --help               # options for any single step
@@ -98,9 +101,9 @@ The cube builder refuses NDVI values that pile up on a few codes. This is the si
 
 ## Design choices and limitations
 
-- **Spatial extent.** Inputs are subset to the bounding box of the ASAL counties, not masked to the county polygons, so the cube includes some cells outside the ASALs. NDVI is requested for the polygon and is missing outside it. Whole counties are used, which includes humid upland parts of counties such as Meru, Embu and Nyeri.
-- **Regridding.** ERA5-Land (0.1 degree) and NDVI (1 km) are linearly interpolated onto the CHIRPS 0.05 degree grid. Interpolating ERA5-Land adds no information below its native resolution. Interpolation samples NDVI at cell centres rather than averaging all 1 km pixels in a cell.
-- **NDVI quality.** NDVI is used as delivered. The VI_Quality layer is downloaded alongside it and could be used to screen cloud-affected pixels; this is not yet applied.
+- **Spatial extent.** Every gridded variable is kept only in cells whose centre lies inside the dissolved polygon of the 23 ASAL counties (`asal_mask`). Cells straddling the boundary are kept or dropped by their centre. Whole counties are used, which includes humid upland parts of counties such as Meru, Embu and Nyeri. `--no-mask` produces the bounding-box version.
+- **Regridding.** NDVI is the mean of all MODIS pixels whose centres fall in each 0.05 degree cell (about 36 pixels for 1 km data). ERA5-Land (0.1 degree) is coarser than the grid and is linearly interpolated onto it, which adds no information below its native resolution.
+- **NDVI quality.** NDVI is not screened. Masking cloud-affected pixels would remove data mainly in rainy months, making the gaps depend on rainfall and biasing lagged analyses. Instead `ndvi_good_fraction` records, for every cell and month, the share of pixels whose VI_Quality flags mark them as good, so users can filter or weight observations themselves.
 - **Time span.** Only months present in every input are kept. With the default downloads this is February 2000 to the latest month available in all sources.
 - **Potential evaporation.** ERA5-Land monthly means of accumulated variables are mean daily totals; the sign is reversed so evaporation is positive, and values are converted to mm/day.
 - **Causal ordering.** ENSO and IOD are treated as external drivers, although they are themselves statistically related. Land management, grazing pressure and fire are not in the cube and act as unobserved confounders for any causal analysis.
@@ -115,7 +118,7 @@ The cube builder refuses NDVI values that pile up on a few codes. This is the si
 pytest -q tests
 ```
 
-The tests create small synthetic inputs in the same formats as the real downloads (NetCDF, AppEEARS GeoTIFFs with both NDVI and quality layers, NOAA PSL text files with headers, footers and -9999 codes) and run the pipeline end to end. They need no network access or credentials. They also check the two failure modes this pipeline previously had: index files parsed one year out of step, and quality codes converted as NDVI.
+The tests create small synthetic inputs in the same formats as the real downloads (NetCDF, AppEEARS GeoTIFFs with both NDVI and quality layers, NOAA PSL text files with headers, footers and -9999 codes) and run the pipeline end to end. They need no network access or credentials. They also check the two failure modes this pipeline previously had (index files parsed one year out of step, and quality codes converted as NDVI), that every variable is masked to the ASAL polygon, and that the NDVI area average counts every pixel once.
 
 ## Repository layout
 

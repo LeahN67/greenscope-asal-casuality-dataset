@@ -6,14 +6,15 @@ dask>=2024.1
 netCDF4>=1.6
 scipy>=1.11                # needed by xarray interpolation
 geopandas>=0.14
+shapely>=2.0              # polygon mask
 pyproj>=3.6
 rioxarray>=0.15
 rasterio>=1.3
 requests>=2.31
 cdsapi>=0.7.2              # ERA5-Land download (Copernicus CDS)
+matplotlib>=3.8            # figures for the data article
 
 # Exploratory analysis (eda/)
-matplotlib>=3.8
 seaborn>=0.13
 
 # Tests

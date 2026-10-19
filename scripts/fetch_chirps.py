@@ -8,9 +8,7 @@ Output: data/raw/chirps/monthly/chirps-v2.0.monthly.nc
 """
 import argparse
 
-from gs_common import CHIRPS, download_with_resume, record_download
-
-URL = "https://data.chc.ucsb.edu/products/CHIRPS-2.0/global_monthly/netcdf/chirps-v2.0.monthly.nc"
+from gs_common import CHIRPS, CHIRPS_URL as URL, download_with_resume, record_download
 
 
 def main():

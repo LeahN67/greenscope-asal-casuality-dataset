@@ -54,7 +54,7 @@ def make_inputs(root, modis_layer="NDVI"):
     (raw / "boundaries").mkdir(parents=True)
     (raw / "boundaries" / "asal_boundary.geojson").write_text(json.dumps({
         "type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {
-            "type": "Polygon", "coordinates": [[[35, 0], [37, 0], [37, 2], [35, 2], [35, 0]]]}}]}))
+            "type": "Polygon", "coordinates": [[[35, 0], [37, 0], [37, 2], [35, 0]]]}}]}))
 
     lat = np.round(np.arange(-1.0, 3.0, 0.05), 3)
     lon = np.round(np.arange(34.0, 38.0, 0.05), 3)
@@ -79,7 +79,7 @@ def make_inputs(root, modis_layer="NDVI"):
         doy = f"{d:%Y}{d.dayofyear:03d}"
         ndvi = rng.integers(-500, 8500, (290, 290)).astype("int16")
         ndvi[:5, :] = -3000
-        qual = rng.choice([2116, 2120, 34896], (290, 290)).astype("uint16")
+        qual = rng.choice([2116, 2118, 34896], (290, 290)).astype("uint16")   # 2118: MODLAND bits 10 (cloudy)
         layers = {"NDVI": (ndvi, -3000), "VI_Quality": (qual, 65535)}
         if modis_layer == "quality_as_ndvi":          # reproduce the original bug
             layers["NDVI"] = (qual, 65535)
@@ -175,11 +175,23 @@ def test_pipeline_end_to_end(tmp_path):
     root = make_inputs(tmp_path)
     r = run("run_pipeline.py", root, "--skip-download", "--allow-missing-index")
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-3000:]
-    assert "24 NDVI, 24 other layers ignored" in r.stdout
+    assert "24 NDVI, 24 VI_Quality, 0 other layers ignored" in r.stdout
 
     f = xr.open_dataset(root / "data/processed/module0/greenscope_final_causal_cube.nc")
-    assert list(f.data_vars) == ["precipitation", "potential_evaporation", "soil_moisture",
-                                 "ndvi", "enso_nino34", "iod_dmi"]
+    assert set(f.data_vars) == {"precipitation", "potential_evaporation", "soil_moisture", "ndvi",
+                                "enso_nino34", "iod_dmi", "asal_mask", "ndvi_good_fraction"}
+    for v in ("precipitation", "potential_evaporation", "soil_moisture", "ndvi", "enso_nino34", "iod_dmi"):
+        assert all(f[v].attrs.get(k) for k in ("units", "long_name", "causal_layer", "causal_role")), v
+    mask = f.asal_mask.values
+    assert 0 < mask.sum() < mask.size                                  # triangle: some cells outside
+    for v in ("precipitation", "potential_evaporation", "soil_moisture", "ndvi", "ndvi_good_fraction"):
+        assert np.isnan(f[v].values[:, mask == 0]).all(), f"{v} not masked"
+        assert np.isfinite(f[v].values[:, mask == 1]).mean() > 0.8, f"{v} mostly missing inside"
+    good = f.ndvi_good_fraction.values[np.isfinite(f.ndvi_good_fraction.values)]
+    assert 0.5 < np.median(good) < 0.8                                # 2 of 3 synthetic codes are usable
+    assert int(f.attrs["asal_cells"]) == int(mask.sum()) and "sha256" in f.attrs["source_chirps"]
+    assert "MOD13A3.061" in f.attrs["source_modis_ndvi"]
+    assert (root / "data/processed/module0/ndvi_input_files.csv").exists()
     assert f.sizes["time"] == 24
     nd = f.ndvi.values[np.isfinite(f.ndvi.values)]
     assert -0.2 <= nd.min() and nd.max() <= 1.0 and 0.2 < np.median(nd) < 0.6
@@ -194,6 +206,11 @@ def test_pipeline_end_to_end(tmp_path):
     assert all(k in f.attrs for k in ("source_chirps", "source_era5_land", "source_enso_file", "causal_registry"))
     report = (root / "data/processed/module0/cube_report.txt").read_text()
     assert "FAIL" not in report
+    figs = root / "data/processed/module0/figures"
+    for name in ("fig1_map.png", "fig2_timeseries.png", "fig3_lags.png", "table2_summary.csv",
+                 "fig3_lags.csv", "paper_numbers.txt"):
+        assert (figs / name).stat().st_size > 0, name
+    assert "ASAL cells" in (figs / "paper_numbers.txt").read_text()
 
 
 def test_pipeline_stops_without_allow_missing(tmp_path):
@@ -223,3 +240,31 @@ def test_cube_rejects_quality_codes_even_if_converted(tmp_path):
                    coords={"time": [d], "latitude": lat, "longitude": lon}).to_netcdf(nd / f"MODIS_NDVI_{d:%Y%m%d}.nc")
     r = run("scripts/data_cube.py", root)
     assert r.returncode != 0 and "VI_Quality" in (r.stdout + r.stderr)
+
+
+def test_area_average_is_exact():
+    """Every fine pixel counts once, in the cell that contains its centre."""
+    import data_cube as dc
+    fine_lat = np.round(np.arange(0.1 - 1 / 240, 0.0, -1 / 120), 6)     # 12 pixels, descending like MODIS
+    fine_lon = np.round(np.arange(35 + 1 / 240, 35.1, 1 / 120), 6)
+    vals = np.arange(144, dtype="float32").reshape(1, 12, 12)
+    vals[0, 0, 0] = np.nan
+    fine = xr.DataArray(vals, dims=("time", "latitude", "longitude"),
+                        coords={"time": [pd.Timestamp("2020-01-01")], "latitude": fine_lat, "longitude": fine_lon})
+    tlat = xr.DataArray([0.025, 0.075], dims="latitude")
+    tlon = xr.DataArray([35.025, 35.075], dims="longitude")
+    out = dc.area_average(fine, tlat, tlon, "x").values[0]
+    for i, la in enumerate((0.025, 0.075)):
+        for j, lo in enumerate((35.025, 35.075)):
+            sel = (np.abs(fine_lat - la) < 0.025)[:, None] & (np.abs(fine_lon - lo) < 0.025)[None, :]
+            assert np.isclose(out[i, j], np.nanmean(vals[0][sel]))
+
+
+def test_no_mask_keeps_bounding_box(tmp_path):
+    root = make_inputs(tmp_path)
+    assert run("scripts/convert_modis_ndvi.py", root).returncode == 0
+    r = run("scripts/data_cube.py", root, "--no-mask", "--no-hash-inputs")
+    assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+    f = xr.open_dataset(root / "data/processed/module0/module0_asal_datacube.nc")
+    assert np.isfinite(f.precipitation.values[:, f.asal_mask.values == 0]).all()
+    assert "bounding box" in f.attrs["spatial_extent"]

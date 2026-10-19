@@ -27,13 +27,21 @@ CHIRPS = RAW / "chirps" / "monthly" / "chirps-v2.0.monthly.nc"
 ERA5_DIR = RAW / "era5_land"
 ERA5 = ERA5_DIR / "era5_land_monthly.nc"
 ERA5_LEGACY = ERA5_DIR / "data_stream-moda.nc"      # name used by earlier manual downloads
+ERA5_REQUEST = ERA5_DIR / "era5_land_monthly.request.json"   # exact CDS request, written by fetch_era5.py
 ENSO = RAW / "enso" / "nino34.txt"
 IOD = RAW / "iod" / "dmi_noaa.txt"
 MODIS_DIR = RAW / "modis_ndvi_monthly"               # AppEEARS GeoTIFFs land here
 MODIS_NC = MODIS_DIR / "ndvi"                        # converted NDVI NetCDF files
+MODIS_TASK = MODIS_DIR / "task_id.txt"               # AppEEARS task id, written by fetch_modis_ndvi.py
 CUBE = PROCESSED / "module0_asal_datacube.nc"
 FINAL_CUBE = PROCESSED / "greenscope_final_causal_cube.nc"
 MANIFEST = RAW / "download_manifest.csv"
+FIGURES = PROCESSED / "figures"
+
+# Source locations, recorded in the cube metadata
+CHIRPS_URL = "https://data.chc.ucsb.edu/products/CHIRPS-2.0/global_monthly/netcdf/chirps-v2.0.monthly.nc"
+ENSO_URL = "https://psl.noaa.gov/data/correlation/nina34.data"
+IOD_URL = "https://psl.noaa.gov/data/timeseries/month/data/dmi.had.long.data"
 
 # ------------------------------------------------------------------
 # Causal registry: one definition used by every script and written into the NetCDF attributes.
@@ -47,6 +55,15 @@ CAUSAL_REGISTRY = {
     "potential_evaporation": ("B", "local stressor", "atmospheric evaporative demand"),
     "soil_moisture": ("B", "mediator", "plant-available water in the top soil layer"),
     "ndvi": ("C", "response", "vegetation condition"),
+}
+
+
+# Variables that describe the data rather than the system; they carry no causal role
+ANCILLARY = {
+    "asal_mask": "1 where the grid-cell centre lies inside the ASAL county polygon, 0 elsewhere",
+    "ndvi_good_fraction": ("share of the MODIS pixels contributing to the cell's NDVI whose VI_Quality "
+                           "flag (bits 0-1) is 00 or 01, i.e. produced with good quality or produced and "
+                           "flagged to check other QA; lower values indicate more cloud-affected pixels"),
 }
 
 

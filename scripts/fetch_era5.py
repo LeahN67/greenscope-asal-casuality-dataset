@@ -13,6 +13,7 @@ The CDS often delivers a ZIP; it is unpacked and merged into one file.
 Output: data/raw/era5_land/era5_land_monthly.nc
 """
 import argparse
+import json
 import os
 import shutil
 import tempfile
@@ -21,7 +22,7 @@ from pathlib import Path
 
 import xarray as xr
 
-from gs_common import ERA5, ERA5_DIR, record_download
+from gs_common import ERA5, ERA5_DIR, ERA5_REQUEST, record_download
 
 DATASET = "reanalysis-era5-land-monthly-means"
 VARIABLES = ["potential_evaporation", "volumetric_soil_water_layer_1"]
@@ -80,6 +81,7 @@ def main():
     print(f"   requesting {DATASET} {args.start}-{args.end} (queueing can take a while)")
     client.retrieve(DATASET, request, str(download))
     normalise(download, ERA5)
+    ERA5_REQUEST.write_text(json.dumps({"dataset": DATASET, "request": request}, indent=1))
     record_download("ERA5-Land monthly means", f"CDS {DATASET} {args.start}-{args.end}", ERA5,
                     notes=",".join(VARIABLES))
     print(f"   saved {ERA5}")
