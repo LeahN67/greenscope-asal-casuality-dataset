@@ -268,3 +268,33 @@ def test_no_mask_keeps_bounding_box(tmp_path):
     f = xr.open_dataset(root / "data/processed/module0/module0_asal_datacube.nc")
     assert np.isfinite(f.precipitation.values[:, f.asal_mask.values == 0]).all()
     assert "bounding box" in f.attrs["spatial_extent"]
+
+
+def test_quality_flags_missing_or_invalid_count_as_not_usable():
+    import data_cube as dc
+    ndvi = xr.DataArray([0.5, 0.5, 0.5, 0.5, 0.5, np.nan], dims="x")
+    # MODLAND bits: 2116 -> 00 good, 2117 -> 01 check QA, 2118 -> 10 cloudy, 2119 -> 11 not produced,
+    # NaN -> missing flag; last pixel has no NDVI
+    quality = xr.DataArray([2116, 2117, 2118, 2119, np.nan, 2116], dims="x")
+    usable = dc.usable_quality(ndvi, quality).values
+    assert list(usable[:5]) == [1, 1, 0, 0, 0] and np.isnan(usable[5])
+
+
+def test_irregular_grid_is_refused():
+    import data_cube as dc
+    dc.check_regular(np.arange(0, 1, 0.05), "ok")
+    dc.check_regular(np.arange(1, 0, -0.05), "descending ok")
+    for bad in ([0.0, 0.05, 0.12, 0.15], [0.0, 0.05, 0.05, 0.1], [0.0, 0.1, 0.05, 0.15]):
+        with pytest.raises(SystemExit):
+            dc.check_regular(np.array(bad), "bad")
+
+
+def test_boundary_cells_and_sensitivity_table(tmp_path):
+    root = make_inputs(tmp_path)
+    r = run("run_pipeline.py", root, "--skip-download", "--allow-missing-index")
+    assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+    f = xr.open_dataset(root / "data/processed/module0/greenscope_final_causal_cube.nc")
+    assert int(f.attrs["boundary_cells_kept"]) > 0 and int(f.attrs["boundary_cells_dropped"]) > 0
+    assert "centre-in-polygon" in f.attrs["mask_rule"]
+    t3 = pd.read_csv(root / "data/processed/module0/figures/table3_ndvi_quality.csv")
+    assert len(t3) == 3 and t3.cell_months_used_pct.iloc[0] == 100

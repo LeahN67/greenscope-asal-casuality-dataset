@@ -16,7 +16,7 @@ The causal ordering is a structural prior that narrows which relationships are p
 | `potential_evaporation` | ERA5-Land monthly means | mm/day | time, latitude, longitude | B, local stressor |
 | `soil_moisture` | ERA5-Land volumetric soil water, layer 1 (0-7 cm) | m3 m-3 | time, latitude, longitude | B, mediator |
 | `ndvi` | MODIS MOD13A3 v061, monthly 1 km NDVI, averaged over all pixels in each cell | 1 | time, latitude, longitude | C, response |
-| `ndvi_good_fraction` | MODIS VI_Quality: share of the cell's pixels with good quality flags | 1 | time, latitude, longitude | ancillary (no causal role) |
+| `ndvi_good_fraction` | MODIS VI_Quality: monthly mean share of the cell's valid-NDVI pixels whose MODLAND bits are 00 or 01 (missing flags count as not usable) | 1 | time, latitude, longitude | ancillary (no causal role) |
 | `asal_mask` | 1 where the cell centre lies inside the ASAL polygon | 1 | latitude, longitude | ancillary (no causal role) |
 
 The two indices hold one regional value per month. xarray broadcasts them against the gridded variables automatically, so `cube.ndvi * cube.enso_nino34` works without reshaping.
@@ -76,7 +76,7 @@ Each step is a script you can also run on its own. Download steps skip files tha
 | 7 | `scripts/data_cube.py` | `data/processed/module0/module0_asal_datacube.nc`, `ndvi_input_files.csv` |
 | 8 | `scripts/causal_integration.py` | `data/processed/module0/greenscope_final_causal_cube.nc` |
 | 9 | `scripts/check_cube.py` | `data/processed/module0/cube_report.txt` |
-| 10 | `scripts/make_figures.py` | `data/processed/module0/figures/` (maps, time series, lag correlations, Table 2, `paper_numbers.txt`) |
+| 10 | `scripts/make_figures.py` | `data/processed/module0/figures/` (maps, time series, lag correlations, Table 2, NDVI quality sensitivity table, `paper_numbers.txt`) |
 
 Every download is logged with its source, size and SHA-256 checksum in `data/raw/download_manifest.csv`. Downloads resume after interruption and retry with exponential backoff.
 
@@ -101,11 +101,12 @@ The cube builder refuses NDVI values that pile up on a few codes. This is the si
 
 ## Design choices and limitations
 
-- **Spatial extent.** Every gridded variable is kept only in cells whose centre lies inside the dissolved polygon of the 23 ASAL counties (`asal_mask`). Cells straddling the boundary are kept or dropped by their centre. Whole counties are used, which includes humid upland parts of counties such as Meru, Embu and Nyeri. `--no-mask` produces the bounding-box version.
-- **Regridding.** NDVI is the mean of all MODIS pixels whose centres fall in each 0.05 degree cell (about 36 pixels for 1 km data). ERA5-Land (0.1 degree) is coarser than the grid and is linearly interpolated onto it, which adds no information below its native resolution.
-- **NDVI quality.** NDVI is not screened. Masking cloud-affected pixels would remove data mainly in rainy months, making the gaps depend on rainfall and biasing lagged analyses. Instead `ndvi_good_fraction` records, for every cell and month, the share of pixels whose VI_Quality flags mark them as good, so users can filter or weight observations themselves.
+- **Spatial extent.** Every gridded variable is kept only in cells whose centre lies inside the dissolved polygon of the 23 ASAL counties (`asal_mask`). Cells straddling the boundary are kept or dropped by their centre (a centre-in-polygon rule); the numbers kept and dropped are recorded in the cube attributes `boundary_cells_kept` and `boundary_cells_dropped`. Whole counties are used, which includes humid upland parts of counties such as Meru, Embu and Nyeri. `--no-mask` produces the bounding-box version.
+- **Regridding.** NDVI is the unweighted mean of all MODIS pixels whose centres fall in each 0.05 degree cell (about 36 pixels for 1 km data); pixel areas within a cell differ by less than 0.01%, so this is effectively an area-weighted mean. Both grids must be regular and monotonic, which the builder checks. ERA5-Land (0.1 degree) is coarser than the grid and is linearly interpolated onto it for alignment only; its effective resolution remains 0.1 degree.
+- **NDVI quality.** NDVI is not screened. Masking cloud-affected pixels would remove data mainly in rainy months, making the gaps depend on rainfall and biasing lagged analyses. Instead `ndvi_good_fraction` records, for every cell and month, the share of pixels whose VI_Quality flags mark them as good, so users can filter or weight observations themselves. `make_figures.py` reports how NDVI and the precipitation-to-NDVI lag change under no filtering, a 0.5 threshold and quality weighting (`table3_ndvi_quality.csv`).
 - **Time span.** Only months present in every input are kept. With the default downloads this is February 2000 to the latest month available in all sources.
 - **Potential evaporation.** ERA5-Land monthly means of accumulated variables are mean daily totals; the sign is reversed so evaporation is positive, and values are converted to mm/day.
+- **ENSO baseline.** The Nino 3.4 anomaly is computed from the ERSSTv5 absolute series against one fixed 1991-2020 calendar-month mean, the current WMO standard normal period. NOAA CPC's Oceanic Nino Index uses centred 30-year base periods updated every five years and is now based on ERSSTv6, and CPC's official monitoring uses the Relative Oceanic Nino Index (RONI). Values in the cube are therefore close to, but not identical with, published ONI or RONI values, and a fixed base period leaves any long-term warming trend in the anomaly.
 - **Causal ordering.** ENSO and IOD are treated as external drivers, although they are themselves statistically related. Land management, grazing pressure and fire are not in the cube and act as unobserved confounders for any causal analysis.
 
 ## Exploratory analysis
@@ -123,7 +124,7 @@ The tests create small synthetic inputs in the same formats as the real download
 ## Repository layout
 
 ```
-run_pipeline.py            runs steps 1 to 9 in order
+run_pipeline.py            runs steps 1 to 10 in order
 scripts/gs_common.py       paths, causal registry, download and checksum helpers
 scripts/                   one script per step (see table above)
 eda/                       exploratory analysis

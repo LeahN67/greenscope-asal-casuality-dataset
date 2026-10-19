@@ -70,6 +70,16 @@ def usable_quality(ndvi, quality):
     return ok.where(ndvi.notnull())
 
 
+def check_regular(coord, label, rtol=1e-3):
+    """Stop unless the coordinate is strictly monotonic and evenly spaced (needed by area_average)."""
+    c = np.asarray(coord, dtype="float64")
+    d = np.diff(c)
+    if c.size < 2 or not (np.all(d > 0) or np.all(d < 0)):
+        raise SystemExit(f"{label}: coordinates are not strictly monotonic")
+    if np.max(np.abs(np.abs(d) - np.abs(d).mean())) > rtol * np.abs(d).mean():
+        raise SystemExit(f"{label}: coordinates are not evenly spaced")
+
+
 def bin_positions(coord, centres):
     """For each fine coordinate, the index of the target cell whose span contains it (-1 if none)."""
     c = np.asarray(centres, dtype="float64")
@@ -85,9 +95,10 @@ def bin_positions(coord, centres):
 
 def area_average(fine, target_lat, target_lon, name):
     """
-    Mean of all fine-grid pixels whose centres fall inside each target cell, month by month.
-    At this scale the fine pixels have practically equal area, so this is an area-weighted mean.
-    Cells with no valid pixel are NaN.
+    Unweighted mean of all fine-grid pixels whose centres fall inside each target cell, month by month.
+    Pixel areas within one 0.05 degree cell differ by less than 0.01% (cosine of latitude over 0.05
+    degree near the equator), so this approximates an area-weighted mean closely. Both grids must be
+    regular (checked by check_regular). Cells with no valid pixel are NaN.
     """
     iy = bin_positions(fine.latitude.values, target_lat.values)
     ix = bin_positions(fine.longitude.values, target_lon.values)
@@ -216,10 +227,14 @@ class Module0Pipeline:
             k = target_step / fine_step
             print(f"   averaging all MODIS pixels in each {target_step:.3f} degree cell "
                   f"(about {k * k:.0f} pixels per cell)")
+            for coord, label in [(ds_n.latitude, "MODIS latitude"), (ds_n.longitude, "MODIS longitude"),
+                                 (target.latitude, "CHIRPS latitude"), (target.longitude, "CHIRPS longitude")]:
+                check_regular(coord.values, label)
             regridded = xr.Dataset({v: area_average(ds_n[v], target.latitude, target.longitude, v)
                                     for v in ds_n.data_vars})
-            self.qc["ndvi_regridding"] = (f"mean of all MODIS pixels (about {fine_step:.4f} degree) whose centres "
-                                          f"fall in each {target_step:.3f} degree cell")
+            self.qc["ndvi_regridding"] = (f"unweighted mean of all MODIS pixels (about {fine_step:.4f} degree) whose "
+                                          f"centres fall in each {target_step:.3f} degree cell (pixel areas within a "
+                                          f"cell differ by less than 0.01%)")
         else:
             print("   MODIS grid is not finer than the target grid; interpolating linearly")
             regridded = ds_n.interp(latitude=target.latitude, longitude=target.longitude, method="linear")
@@ -230,6 +245,14 @@ class Module0Pipeline:
         geom = gdf.geometry.union_all() if hasattr(gdf.geometry, "union_all") else gdf.geometry.unary_union
         lon2, lat2 = np.meshgrid(lon.values, lat.values)
         inside = shapely.contains_xy(geom, lon2, lat2)
+        # cells crossed by the polygon boundary: partly inside, partly outside
+        h = float(np.abs(np.diff(lat.values)).mean()) / 2
+        boxes = shapely.box(lon2 - h, lat2 - h, lon2 + h, lat2 + h)
+        shapely.prepare(geom)
+        straddle = shapely.intersects(geom, boxes) & ~shapely.contains(geom, boxes)
+        self.qc["boundary_cells_kept"] = int((straddle & inside).sum())
+        self.qc["boundary_cells_dropped"] = int((straddle & ~inside).sum())
+        self.qc["mask_rule"] = "centre-in-polygon: a cell is kept when its centre lies inside the ASAL polygon"
         return xr.DataArray(inside.astype("int8"), dims=("latitude", "longitude"),
                             coords={"latitude": lat.values, "longitude": lon.values}, name="asal_mask")
 
@@ -290,7 +313,9 @@ class Module0Pipeline:
         mask = self.asal_mask(gdf, ds.latitude, ds.longitude)
         area = float((cell_area_km2(ds.latitude, step).broadcast_like(mask) * mask).sum())
         self.qc.update(asal_cells=int(mask.sum()), asal_area_km2=round(area))
-        print(f"   ASAL polygon covers {int(mask.sum()):,} of {mask.size:,} grid cells (about {area:,.0f} km2)")
+        print(f"   ASAL polygon covers {int(mask.sum()):,} of {mask.size:,} grid cells (about {area:,.0f} km2); "
+              f"{self.qc['boundary_cells_kept']:,} boundary cells kept and {self.qc['boundary_cells_dropped']:,} dropped "
+              f"by the centre rule")
         if self.mask:
             for v in ds.data_vars:
                 ds[v] = ds[v].where(mask == 1)

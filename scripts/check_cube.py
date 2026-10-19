@@ -100,7 +100,7 @@ def main():
     else:
         say("WARN", "ndvi_good_fraction: not present (no VI_Quality in the NDVI inputs)")
 
-    for k in ("qc_ndvi_pixels_out_of_range", "qc_precipitation_negative_cells",
+    for k in ("mask_rule", "boundary_cells_kept", "boundary_cells_dropped", "qc_ndvi_pixels_out_of_range", "qc_precipitation_negative_cells",
               "qc_pev_positive_cells_before_sign_reversal", "ndvi_regridding"):
         if k in ds.attrs:
             lines.append(f"INFO  {k}: {ds.attrs[k]}")

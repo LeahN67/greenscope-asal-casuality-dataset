@@ -61,9 +61,10 @@ CAUSAL_REGISTRY = {
 # Variables that describe the data rather than the system; they carry no causal role
 ANCILLARY = {
     "asal_mask": "1 where the grid-cell centre lies inside the ASAL county polygon, 0 elsewhere",
-    "ndvi_good_fraction": ("share of the MODIS pixels contributing to the cell's NDVI whose VI_Quality "
-                           "flag (bits 0-1) is 00 or 01, i.e. produced with good quality or produced and "
-                           "flagged to check other QA; lower values indicate more cloud-affected pixels"),
+    "ndvi_good_fraction": ("monthly mean, across the available MODIS composites, of the share of pixels with a "
+                           "valid NDVI value in the cell whose VI_Quality MODLAND bits (0-1) are 00 (good quality) "
+                           "or 01 (produced, check other QA); a missing quality flag counts as not usable; lower "
+                           "values indicate more cloud-affected pixels"),
 }
 
 

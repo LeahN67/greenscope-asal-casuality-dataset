@@ -12,6 +12,9 @@ Outputs in data/processed/module0/figures/:
                            late (the header-row error); (b) lagged correlation of precipitation with NDVI
   table2_summary.csv       minimum, median, maximum and missing share of every variable (inside the ASALs)
   fig3_lags.csv            the correlations behind Figure 3
+  table3_ndvi_quality.csv  NDVI statistics and the precipitation-to-NDVI lag under three treatments of
+                           cloud-affected pixels: none, cell-months with ndvi_good_fraction >= 0.5 only,
+                           and ASAL means weighted by ndvi_good_fraction
   paper_numbers.txt        every number the data article needs, in one place
 
 Area means use cos(latitude) weights over cells inside the ASAL mask. Anomalies are standardised by
@@ -48,11 +51,16 @@ plt.rcParams.update({
 })
 
 
-def area_mean(ds, var):
-    w = np.cos(np.deg2rad(ds.latitude))
+def area_mean(ds, var, extra_weight=None, keep=None):
+    """cos(latitude)-weighted mean over the ASAL mask; optional extra weight and cell-month filter."""
+    w = np.cos(np.deg2rad(ds.latitude)).broadcast_like(ds[var])
     da = ds[var]
     if "asal_mask" in ds:
         da = da.where(ds["asal_mask"] == 1)
+    if keep is not None:
+        da = da.where(keep)
+    if extra_weight is not None:
+        w = w * extra_weight.fillna(0)
     return da.weighted(w.fillna(0)).mean(("latitude", "longitude")).to_series()
 
 
@@ -144,6 +152,30 @@ def main():
     lags = pd.concat([lag_a, lag_b, lag_c])
     lags.to_csv(out / "fig3_lags.csv", index=False, float_format="%.4f")
 
+    # ---------------- Table 3: sensitivity of NDVI to the treatment of cloud-affected pixels
+    sens = []
+    if "ndvi_good_fraction" in ds:
+        gf = ds["ndvi_good_fraction"]
+        inside = (ds["asal_mask"] == 1) if "asal_mask" in ds else xr.ones_like(gf, dtype=bool)
+        valid = ds["ndvi"].notnull() & inside
+        variants = {
+            "no quality filtering": dict(),
+            "cell-months with ndvi_good_fraction >= 0.5": dict(keep=gf >= 0.5),
+            "weighted by ndvi_good_fraction": dict(extra_weight=gf),
+        }
+        for name, kw in variants.items():
+            s_ndvi = area_mean(ds, "ndvi", **kw)
+            kept = valid & kw["keep"] if "keep" in kw else valid
+            d = lagged_corr(precip, standardised_anomaly(s_ndvi), 6)
+            ok = d[d.n >= 12]
+            best = ok.loc[ok.r.abs().idxmax()] if not ok.empty and ok.r.notna().any() else None
+            sens.append({"treatment": name,
+                         "asal_mean_ndvi_median": float(s_ndvi.median()),
+                         "cell_months_used_pct": 100 * float(kept.sum()) / max(int(valid.sum()), 1),
+                         "peak_lag_months": int(best.lag_months) if best is not None else np.nan,
+                         "peak_r": float(best.r) if best is not None else np.nan})
+        pd.DataFrame(sens).to_csv(out / "table3_ndvi_quality.csv", index=False, float_format="%.4g")
+
     fig, (a, b) = plt.subplots(1, 2, figsize=(7, 2.8))
     for d, color, style, label in [(lag_a, SERIES_1, "-", "Correctly aligned"),
                                    (lag_b, SERIES_2, "--", "Dated 12 months late")]:
@@ -179,7 +211,7 @@ def main():
         f"ASAL cells: {int(mask.sum()):,} (about {ds.attrs.get('asal_area_km2', '?')} km2); "
         f"extent: {ds.attrs.get('spatial_extent', '?')}",
     ]
-    for k in ("qc_ndvi_pixels_out_of_range", "qc_precipitation_negative_cells",
+    for k in ("mask_rule", "boundary_cells_kept", "boundary_cells_dropped", "qc_ndvi_pixels_out_of_range", "qc_precipitation_negative_cells",
               "qc_pev_positive_cells_before_sign_reversal", "ndvi_regridding"):
         lines.append(f"{k}: {ds.attrs.get(k, 'not recorded')}")
     for v in INDICES:
@@ -190,6 +222,9 @@ def main():
               f"  DMI correctly aligned:      {peak(lag_a)}",
               f"  DMI dated 12 months late:   {peak(lag_b)}",
               f"  precipitation to NDVI:      {peak(lag_c)}"]
+    if sens:
+        lines += ["", "Table 3, NDVI under three treatments of cloud-affected pixels:",
+                  pd.DataFrame(sens).to_string(index=False, float_format=lambda x: f"{x:.4g}")]
     (out / "paper_numbers.txt").write_text("\n".join(lines) + "\n")
     print("\n".join("   " + l for l in lines))
     print(f"\n   figures and tables saved in {out}")
