@@ -335,5 +335,9 @@ class CHIRPSExplorer:
 
 
 if __name__ == "__main__":
-    explorer = CHIRPSExplorer("data/raw/chirps/monthly/chirps-v2.0.monthly.nc")
+    import argparse
+    ap = argparse.ArgumentParser(description="CHIRPS EDA. Defaults to the precipitation in the ASAL cube; "
+                                             "pass the raw global file only if you want global statistics.")
+    ap.add_argument("path", nargs="?", default="data/processed/module0/greenscope_final_causal_cube.nc")
+    explorer = CHIRPSExplorer(ap.parse_args().path)
     explorer.run()

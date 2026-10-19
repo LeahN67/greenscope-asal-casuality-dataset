@@ -1,380 +1,150 @@
-# GreenScope ASAL Causal Data Cube (Module 0)
+# GreenScope ASAL Causal Data Cube
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+A reproducible pipeline that builds a monthly, 0.05 degree climate and vegetation data cube for the 23 Arid and Semi-Arid Land (ASAL) counties of Kenya. It combines five public datasets on one grid and one monthly time axis, and records a hypothesised driver, mediator and response ordering of the variables in the file itself. The cube is designed to support causal discovery and lagged analysis of how ocean-atmosphere drivers propagate through rainfall and soil moisture to vegetation.
 
-**Infrastructure Test Project: Validating Causal-Ready Data Pipelines for Kenya's ASALs**
+The causal ordering is a structural prior that narrows which relationships are plausible. It does not by itself show that any relationship is causal.
 
-## 📌 Overview
+## What the pipeline produces
 
-This repository serves as a **technical validation project** for the [GreenScope Analytics](https://greenscopeanalytics.com/) platform. It demonstrates how to transform fragmented, multi-source environmental data into a **certified 3D Data Cube** specifically designed for Kenya's Arid and Semi-Arid Lands (ASALs).
+`data/processed/module0/greenscope_final_causal_cube.nc`, a NetCDF4 file with six variables:
 
-The project focuses on **Module 0: Data Capture & Readiness**, implementing the "Last Mile" of climate data engineering where raw datasets become analysis-ready, causally-structured data products.
+| Variable | Source | Units | Dimensions | Causal layer and role |
+|---|---|---|---|---|
+| `enso_nino34` | Nino 3.4 SST (ERSSTv5, NOAA CPC), converted to anomaly against 1991-2020 | degC | time | A, global driver |
+| `iod_dmi` | Dipole Mode Index (HadISST, NOAA PSL) | degC | time | A, global driver |
+| `precipitation` | CHIRPS v2.0 monthly | mm/month | time, latitude, longitude | B, local driver |
+| `potential_evaporation` | ERA5-Land monthly means | mm/day | time, latitude, longitude | B, local stressor |
+| `soil_moisture` | ERA5-Land volumetric soil water, layer 1 (0-7 cm) | m3 m-3 | time, latitude, longitude | B, mediator |
+| `ndvi` | MODIS MOD13A3 v061, monthly 1 km NDVI | 1 | time, latitude, longitude | C, response |
 
----
+The two indices hold one regional value per month. xarray broadcasts them against the gridded variables automatically, so `cube.ndvi * cube.enso_nino34` works without reshaping.
 
-## 🎯 Key Features
+Every variable carries `units`, `long_name`, `causal_layer` and `causal_role` attributes. The file's global attributes list the input files with their sizes and SHA-256 checksums and the processing steps applied.
 
-- ✅ **Fully Automated Pipeline** - From raw data to analysis-ready cube
-- ✅ **Causal Structure** - Variables organized by causal hierarchy (Drivers → Stressors → Responses)
-- ✅ **Multi-Source Integration** - Harmonizes CHIRPS, ERA5, MODIS, ENSO, and IOD data
-- ✅ **Production Ready** - Includes error handling, logging, and resume capability
-- ✅ **Reproducible** - All paths configurable, no hardcoded values
-- ✅ **Open Source** - Apache 2.0 license, community contributions welcome
-
----
-
-## 🏗️ GreenScope Infrastructure Principles
-
-As a test project for the GreenScope platform, this pipeline validates four core infrastructure pillars:
-
-### 1. **Causal Admissibility**
-Variables are tiered (Global Drivers → Local Stressors → Ecosystem Responses) to prevent impossible causal loops and ensure scientifically valid inference.
-
-### 2. **Physical Integrity**
-"Sanity Gates" enforce real-world physical bounds (e.g., non-negative rainfall, NDVI within [-0.2, 1.0]) to catch data corruption early.
-
-### 3. **Auditability**
-SHA-256 checksums and immutable logging create a transparent data provenance record for every download and transformation.
-
-### 4. **Interoperability**
-Harmonizes different spatial resolutions (CHIRPS 0.05°, MODIS 250m, ERA5 0.1°) into a unified, analysis-ready grid using bilinear interpolation.
-
----
-
-## 🧱 Causal Registry
-
-This project implements the GreenScope **Layered Causal Registry**, which defines the role of each variable prior to ingestion:
-
-| Layer | Type | Variable | Dataset Source | Spatial Res. | Temporal Res. | Platform Role |
-|-------|------|----------|----------------|--------------|---------------|---------------|
-| **Layer A** | **Global Driver** | ENSO (Niño 3.4) | NOAA ERSSTv5 | Global | Monthly | External Forcing |
-| **Layer A** | **Global Driver** | IOD (DMI) | NOAA PSL | Global | Monthly | External Forcing |
-| **Layer B** | **Local Stressor** | Precipitation | CHIRPS v2.0 | 0.05° (~5km) | Monthly | Primary Input |
-| **Layer B** | **Mediator** | Potential Evaporation | ERA5-Land | 0.1° (~9km) | Monthly | System Process |
-| **Layer B** | **Mediator** | Soil Moisture | ERA5-Land | 0.1° (~9km) | Monthly | System Buffer |
-| **Layer C** | **Response** | NDVI | MODIS MOD13Q1 | 250m | 16-day | Observed Impact |
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Python 3.8+
-- NASA Earthdata account ([register here](https://urs.earthdata.nasa.gov/users/new))
-- Copernicus CDS account for ERA5 ([register here](https://cds.climate.copernicus.eu/))
-
-### Installation
+## Quick start
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/greenscope-asal-datacube.git
-cd greenscope-asal-datacube
-
-# Install dependencies
+git clone https://github.com/LeahN67/greenscope-asal-casuality-dataset.git
+cd greenscope-asal-casuality-dataset
+python -m venv venv
+# Windows: venv\Scripts\activate      Linux/macOS: source venv/bin/activate
 pip install -r requirements.txt
-
-# Set up environment
-export GREENSCOPE_PROJECT_ROOT=$(pwd)
-export CDS_API_KEY="your_uid:your_api_key"
-export NASA_EARTHDATA_USERNAME="your_username"
-export NASA_EARTHDATA_PASSWORD="your_password"
+pytest -q tests                        # offline check that the pipeline works on this machine
 ```
 
-### Basic Usage
+Set your credentials (see below), then run everything from the repository root:
 
 ```bash
-# 1. Create study area boundary
-python scripts/create_asal_boundaries.py
-
-# 2. Download climate data
-python scripts/fetch_chirps.py --format netcdf --non-interactive
-python scripts/fetch_era5.py --variables soil_moisture potential_evaporation
-python scripts/fetch_enso.py --index-type nino34
-python scripts/fetch_iod.py --format txt
-
-# 3. Download MODIS NDVI (interactive, requires NASA login)
-python scripts/fetch_modis_ndvi.py --start-date 01-01-2020 --end-date 12-31-2025
-
-# 4. Create unified data cube
-python scripts/data_cube.py
-
-# 5. Integrate global climate indices
-python scripts/causal_integration.py
+python run_pipeline.py
 ```
 
----
+The MODIS step submits a request to NASA AppEEARS that can take several hours to process. If you stop the script while it waits, run `python run_pipeline.py --from modis` later: it continues the saved request instead of submitting a new one.
 
-## 📁 Project Structure
+## Credentials
 
-```
-greenscope-asal-datacube/
-├── data/
-│   ├── raw/                        # Raw downloaded data (gitignored)
-│   │   ├── boundaries/             # Study area boundaries
-│   │   ├── chirps/                 # Precipitation data
-│   │   ├── era5_land/              # ERA5 soil moisture & evaporation
-│   │   ├── modis_ndvi/             # MODIS vegetation indices
-│   │   ├── enso/                   # ENSO indices
-│   │   └── iod/                    # IOD indices
-│   └── processed/                  # Processed data cubes
-│       └── module0/                # Final causal data cube
-├── scripts/
-│   ├── create_asal_boundaries.py   # Download admin boundaries
-│   ├── fetch_chirps.py             # Download CHIRPS precipitation
-│   ├── fetch_era5.py               # Download ERA5-Land data
-│   ├── fetch_enso.py               # Download ENSO indices
-│   ├── fetch_iod.py                # Download IOD indices
-│   ├── fetch_modis_ndvi.py         # Download MODIS NDVI
-│   ├── data_cube.py                # Create unified data cube
-│   ├── causal_integration.py       # Integrate global indices
-│   └── unzip_era5.py               # Extract/validate ERA5 files
-├── requirements.txt                # Python dependencies
-├── README.md                       # This file
-├── LICENSE                         # Apache 2.0 license
-└── .gitignore                      # Git ignore rules
+Two of the five sources need a free account. The scripts read credentials from environment variables, so no key is written into the code.
+
+| Source | Account | What to set |
+|---|---|---|
+| ERA5-Land | Copernicus Climate Data Store, and accept the ERA5-Land licence on its dataset page | `CDSAPI_KEY` (your personal access token), or a `~/.cdsapirc` file |
+| MODIS NDVI | NASA Earthdata | `EARTHDATA_USERNAME` and `EARTHDATA_PASSWORD`, or type them when prompted |
+
+Windows PowerShell:
+
+```powershell
+$env:CDSAPI_KEY = "your-token"
+$env:EARTHDATA_USERNAME = "your-username"
+$env:EARTHDATA_PASSWORD = "your-password"
 ```
 
----
+Linux or macOS: `export CDSAPI_KEY=your-token` and so on. Never commit a `.cdsapirc` or `.env` file; both are in `.gitignore`.
 
-## 🛠️ Detailed Pipeline Workflow
+## Pipeline steps
 
-### Phase 1: Data Acquisition (The Vault)
+Each step is a script you can also run on its own. Download steps skip files that already exist.
 
-Automated scrapers fetch raw data, verify integrity via checksums, and store them in an immutable `/raw` directory.
+| Step | Script | Output |
+|---|---|---|
+| 1 | `scripts/create_asal_boundaries.py` | `data/raw/boundaries/asal_boundary.geojson` (23 counties, dissolved) |
+| 2 | `scripts/fetch_chirps.py` | `data/raw/chirps/monthly/chirps-v2.0.monthly.nc` (global, several GB) |
+| 3 | `scripts/fetch_era5.py` | `data/raw/era5_land/era5_land_monthly.nc` (2000-2025) |
+| 4 | `scripts/fetch_enso.py`, `scripts/fetch_iod.py` | `data/raw/enso/nino34.txt`, `data/raw/iod/dmi_noaa.txt` |
+| 5 | `scripts/fetch_modis_ndvi.py` | `data/raw/modis_ndvi_monthly/*.tif` (February 2000 to December 2025) |
+| 6 | `scripts/convert_modis_ndvi.py` | `data/raw/modis_ndvi_monthly/ndvi/*.nc` |
+| 7 | `scripts/data_cube.py` | `data/processed/module0/module0_asal_datacube.nc` |
+| 8 | `scripts/causal_integration.py` | `data/processed/module0/greenscope_final_causal_cube.nc` |
+| 9 | `scripts/check_cube.py` | `data/processed/module0/cube_report.txt` |
+
+Every download is logged with its source, size and SHA-256 checksum in `data/raw/download_manifest.csv`. Downloads resume after interruption and retry with exponential backoff.
+
+Useful options:
 
 ```bash
-# Download all required datasets
-python scripts/create_asal_boundaries.py
-python scripts/fetch_chirps.py --format netcdf
-python scripts/fetch_era5.py
-python scripts/fetch_enso.py
-python scripts/fetch_iod.py
-python scripts/fetch_modis_ndvi.py
+python run_pipeline.py --skip-download          # steps 6 to 9 only, on data already downloaded
+python run_pipeline.py --from data_cube         # restart from a given step
+python run_pipeline.py --allow-missing-index    # see "Index gaps" below
+python scripts/<script>.py --help               # options for any single step
 ```
 
-**Features:**
-- Resume capability for interrupted downloads
-- Automatic retry with exponential backoff
-- SHA-256 checksum validation
-- Download logging with timestamps
+### Index gaps
 
-### Phase 2: Spatial Harmonization (The Harmonizer)
+The Dipole Mode Index is published with a lag, so its latest months are often missing (coded -9999). By default `causal_integration.py` stops and lists the cube months that have no index value, rather than filling them. Download the index again, or rerun with `--allow-missing-index` to keep those months as missing values; they are then listed in the variable's `missing_months` attribute.
 
-The `data_cube.py` engine performs spatial re-gridding and temporal resampling:
+## Checking the result
+
+`check_cube.py` compares every variable with a plausible physical range and writes `cube_report.txt`. A FAIL means the cube should not be analysed until the cause is found. It also warns when the record is shorter than 120 months, which gives little statistical power for lagged causal analysis.
+
+The cube builder refuses NDVI values that pile up on a few codes. This is the signature of the MODIS VI_Quality layer having been converted in place of NDVI, a mistake that is easy to make because AppEEARS delivers both layers into the same folder.
+
+## Design choices and limitations
+
+- **Spatial extent.** Inputs are subset to the bounding box of the ASAL counties, not masked to the county polygons, so the cube includes some cells outside the ASALs. NDVI is requested for the polygon and is missing outside it. Whole counties are used, which includes humid upland parts of counties such as Meru, Embu and Nyeri.
+- **Regridding.** ERA5-Land (0.1 degree) and NDVI (1 km) are linearly interpolated onto the CHIRPS 0.05 degree grid. Interpolating ERA5-Land adds no information below its native resolution. Interpolation samples NDVI at cell centres rather than averaging all 1 km pixels in a cell.
+- **NDVI quality.** NDVI is used as delivered. The VI_Quality layer is downloaded alongside it and could be used to screen cloud-affected pixels; this is not yet applied.
+- **Time span.** Only months present in every input are kept. With the default downloads this is February 2000 to the latest month available in all sources.
+- **Potential evaporation.** ERA5-Land monthly means of accumulated variables are mean daily totals; the sign is reversed so evaporation is positive, and values are converted to mm/day.
+- **Causal ordering.** ENSO and IOD are treated as external drivers, although they are themselves statistically related. Land management, grazing pressure and fire are not in the cube and act as unobserved confounders for any causal analysis.
+
+## Exploratory analysis
+
+`eda/` holds exploratory scripts for CHIRPS, ENSO and IOD. `python eda/chirps_eda.py` analyses the precipitation in the final cube by default. These scripts are not part of the cube build.
+
+## Tests
 
 ```bash
-python scripts/data_cube.py
+pytest -q tests
 ```
 
-**Processing Steps:**
-1. Loads boundary and extracts bounding box
-2. Spatially subsets all datasets to study area
-3. Regrids ERA5 (0.1°) and MODIS (250m) to CHIRPS grid (0.05°)
-4. Resamples MODIS from 16-day to monthly
-5. Aligns all time dimensions to monthly frequency
-6. Applies physical sanity checks (e.g., precipitation ≥ 0)
-7. Exports to compressed NetCDF with optimal chunking
+The tests create small synthetic inputs in the same formats as the real downloads (NetCDF, AppEEARS GeoTIFFs with both NDVI and quality layers, NOAA PSL text files with headers, footers and -9999 codes) and run the pipeline end to end. They need no network access or credentials. They also check the two failure modes this pipeline previously had: index files parsed one year out of step, and quality codes converted as NDVI.
 
-### Phase 3: Causal Integration (The Left-Join)
+## Repository layout
 
-Performs a **Temporal Left Join**, broadcasting 1D global indices (ENSO/IOD) across the 3D spatial grid:
-
-```bash
-python scripts/causal_integration.py
+```
+run_pipeline.py            runs steps 1 to 9 in order
+scripts/gs_common.py       paths, causal registry, download and checksum helpers
+scripts/                   one script per step (see table above)
+eda/                       exploratory analysis
+tests/test_pipeline.py     offline end-to-end tests
+requirements.txt
 ```
 
-This makes every pixel "causally aware" of global climate states, enabling downstream causal inference and machine learning.
+To keep data somewhere other than the repository, set `GREENSCOPE_PROJECT_ROOT` to that folder; all `data/` paths are resolved from it.
 
----
+## Data sources
 
-## 📊 Final Output
+- Funk, C. et al. (2015). The climate hazards infrared precipitation with stations, a new environmental record for monitoring extremes. *Scientific Data* 2, 150066.
+- Munoz-Sabater, J. et al. (2021). ERA5-Land: a state-of-the-art global reanalysis dataset for land applications. *Earth System Science Data* 13, 4349-4383.
+- Didan, K. (2021). MODIS/Terra Vegetation Indices Monthly L3 Global 1km SIN Grid V061 (MOD13A3). NASA LP DAAC. Accessed through AppEEARS.
+- Huang, B. et al. (2017). Extended Reconstructed Sea Surface Temperature, Version 5 (ERSSTv5). *Journal of Climate* 30, 8179-8205.
+- Saji, N. H. et al. (1999). A dipole mode in the tropical Indian Ocean. *Nature* 401, 360-363. DMI from NOAA PSL using HadISST (Rayner, N. A. et al., 2003, *Journal of Geophysical Research* 108, 4407).
+- County boundaries: geoBoundaries (gbOpen, KEN ADM1), with GADM 4.1 as fallback.
 
-The pipeline produces a **GreenScope-Certified Data Cube**:
+Each source keeps its own licence and citation requirements.
 
-**File:** `data/processed/module0/greenscope_final_causal_cube.nc`
+## Citation
 
-**Specifications:**
-- **Spatial Coverage:** Kenya ASAL counties (23 counties, ~500,000 km²)
-- **Spatial Resolution:** 0.05° (~5.5 km)
-- **Temporal Coverage:** 2000 - Present
-- **Temporal Resolution:** Monthly
-- **Variables:** 7 (2 drivers + 3 stressors/mediators + 1 response + 1 global index)
-- **Format:** NetCDF4 with compression
-- **Size:** ~50-200 MB (depending on time range)
+Njuguna, L. H. (2026). GreenScope ASAL Causal Data Cube: pipeline for a causally structured climate and vegetation data cube for Kenya's Arid and Semi-Arid Lands. GitHub. https://github.com/LeahN67/greenscope-asal-casuality-dataset
 
-**Usage Example:**
+## License
 
-```python
-import xarray as xr
-
-# Load the data cube
-ds = xr.open_dataset('data/processed/module0/greenscope_final_causal_cube.nc')
-
-# Explore structure
-print(ds)
-
-# Access variables
-precip = ds['precipitation']
-ndvi = ds['ndvi']
-enso = ds['enso_nino34']
-
-# Compute correlations
-correlation = xr.corr(enso, ndvi.mean(dim=['latitude', 'longitude']))
-```
-
----
-
-## 🔧 Advanced Configuration
-
-### Environment Variables
-
-```bash
-# Project root directory
-export GREENSCOPE_PROJECT_ROOT=/path/to/project
-
-# API credentials
-export CDS_API_KEY="your_cds_uid:your_cds_key"
-export NASA_EARTHDATA_USERNAME="your_nasa_username"
-export NASA_EARTHDATA_PASSWORD="your_nasa_password"
-```
-
-### Custom Paths
-
-All scripts accept custom paths via command-line arguments:
-
-```bash
-# Custom project root
-python scripts/data_cube.py --project-root /custom/path
-
-# Custom input/output paths
-python scripts/data_cube.py \
-  --chirps /path/to/chirps.nc \
-  --era5 /path/to/era5.nc \
-  --modis /path/to/modis \
-  --boundary /path/to/boundary.geojson \
-  --output-dir /path/to/output
-```
-
-### Custom Study Areas
-
-Download boundaries for different countries or regions:
-
-```bash
-# Tanzania
-python scripts/create_asal_boundaries.py --country TZA
-
-# Custom county list
-python scripts/create_asal_boundaries.py \
-  --country KEN \
-  --counties Turkana Marsabit Wajir
-```
-
----
-
-## 📚 Documentation
-
-### Script Documentation
-
-Each script has comprehensive help:
-
-```bash
-python scripts/data_cube.py --help
-python scripts/fetch_chirps.py --help
-```
-
-### API Documentation
-
-See individual script docstrings for programmatic usage:
-
-```python
-from scripts.data_cube import create_data_cube
-
-# Create data cube programmatically
-ds = create_data_cube(
-    chirps_path='data/chirps.nc',
-    era5_path='data/era5.nc',
-    # ... other parameters
-)
-```
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-### Development Setup
-
-```bash
-# Clone and install in development mode
-git clone https://github.com/yourusername/greenscope-asal-datacube.git
-cd greenscope-asal-datacube
-pip install -e .
-
-# Run tests (if available)
-pytest tests/
-```
-
-### Code Style
-
-- Follow PEP 8 guidelines
-- Use type hints where appropriate
-- Add docstrings to all functions
-- Keep functions focused and modular
-
----
-
-## 📖 Citation
-
-If you use this pipeline in your research, please cite:
-
-```bibtex
-@software{greenscope_asal_datacube,
-  title = {GreenScope ASAL Causal Data Cube},
-  author = {Your Name},
-  year = {2024},
-  url = {https://github.com/yourusername/greenscope-asal-datacube},
-  license = {Apache-2.0}
-}
-```
-
----
-
-## 🌍 About GreenScope Analytics
-
-GreenScope is a data and AI infrastructure platform designed for climate and sustainability intelligence. We enable researchers and organizations to build decision-grade tools by providing a transparent, causal foundation for environmental data.
-
-**Learn more at [greenscopeanalytics.com](https://greenscopeanalytics.com/)**
-
----
-
-## 📄 License
-
-This project is licensed under the **Apache License 2.0** - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 📧 Contact
-
-For questions, collaborations, or feedback:
-
-- **Email:** njugunalh@gmail.com
-- **Website:** [greenscopeanalytics.com](https://greenscopeanalytics.com/)
-- **Issues:** [GitHub Issues](https://github.com/yourusername/greenscope-asal-datacube/issues)
-
----
-
-## 🙏 Acknowledgments
-
-This project uses data from:
-
-- **CHIRPS** - Climate Hazards Group, UC Santa Barbara
-- **ERA5-Land** - European Centre for Medium-Range Weather Forecasts (ECMWF)
-- **MODIS** - NASA Earth Observing System
-- **ENSO/IOD Indices** - NOAA Physical Sciences Laboratory
-
----
-
-*Built with ❤️ for the climate science community*
+Apache-2.0. See `LICENSE`.

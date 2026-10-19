@@ -51,8 +51,8 @@ class IODExplorer:
                 parts = line.split()
                 if len(parts) >= 13:
                     year = int(parts[0])
-                    monthly_values = [float(x) if x not in ['-99.99', '-999.00', '-9.99'] else np.nan 
-                                    for x in parts[1:13]]
+                    # NOAA missing codes include -99.99, -999 and -9999; treat anything <= -90 as missing
+                    monthly_values = [float(x) if float(x) > -90 else np.nan for x in parts[1:13]]
                     
                     for month, value in enumerate(monthly_values, 1):
                         if not np.isnan(value):
@@ -76,7 +76,7 @@ class IODExplorer:
             
             try:
                 self.df = pd.read_csv(self.filepath, sep=r'\s+', header=None, 
-                                     skiprows=1, na_values=[-99.99, -999.00, -9.99])
+                                     skiprows=1, na_values=[-99.99, -999.00, -9999.0])
                 
                 self.df.columns = ['Year'] + list(range(1, 13))
                 df_long = pd.melt(self.df, id_vars=['Year'], value_vars=range(1, 13),

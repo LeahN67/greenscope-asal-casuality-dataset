@@ -1,17 +1,31 @@
-echo "
-# Python
-__pycache__/
-*.pyc
+# Credentials: never commit these
+.cdsapirc
 .env
+*.netrc
 
-# Data
-data/raw/
+# Data (downloads and outputs are large; publish the final cube on Zenodo instead)
+data/
 *.nc
 *.tif
+*.tif.gz
+*.part
 
-# Notebooks
-.ipynb_checkpoints/
+# Python and environments
+__pycache__/
+*.pyc
+.pytest_cache/
+green_env/
+venv/
+.venv/
 
-# OS
+# Reports produced locally
+reports/
+outputs/
+CHANGES.md
+
+# Editors and OS
+.vscode/
+.idea/
+.qodo/
 .DS_Store
-" > .gitignore
+Thumbs.db

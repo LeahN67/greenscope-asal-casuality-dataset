@@ -1,151 +1,138 @@
-import xarray as xr
-import pandas as pd
-import numpy as np
+"""
+Step 8. Add the global climate indices (Nino 3.4 anomaly, Dipole Mode Index) to the cube, matched
+month by month. Each index is stored once per month (dimension: time). xarray broadcasts it against
+the gridded variables automatically, so every grid cell sees the same regional value for that month.
+
+    python scripts/causal_integration.py
+    python scripts/causal_integration.py --allow-missing-index   # keep months without an index value as NaN
+
+What it does:
+  1. parses the NOAA PSL files by the year on each row (header and footer lines are skipped;
+     values <= -90 such as -99.99 and -9999 become missing)
+  2. converts the absolute Nino 3.4 SST to an anomaly against its 1991-2020 calendar-month mean
+  3. matches each cube month exactly; stops if a month has no value unless --allow-missing-index
+  4. writes the indices, their causal roles and input checksums into the final file
+
+Output: data/processed/module0/greenscope_final_causal_cube.nc
+"""
+import argparse
 from pathlib import Path
-import os
 
-# ------------------------------------------------------------------
-# 1. SETUP PATHS - GENERALIZED
-# ------------------------------------------------------------------
-# Option 1: Use environment variable with fallback to current directory
-BASE_PROJ = Path(os.getenv('GREENSCOPE_PROJECT_ROOT', Path.cwd()))
+import numpy as np
+import pandas as pd
+import xarray as xr
 
-# Option 2: Use relative paths from script location
-# BASE_PROJ = Path(__file__).parent.parent
+from gs_common import CUBE, ENSO, FINAL_CUBE, IOD, sha256_file, tag_causal_role
 
-# Define relative paths from base project directory
-DATA_CUBE_PATH = BASE_PROJ / "data" / "processed" / "module0" / "module0_asal_datacube.nc"
-ENSO_FILE = BASE_PROJ / "data" / "raw" / "enso" / "nino34.txt"
-IOD_FILE = BASE_PROJ / "data" / "raw" / "iod" / "dmi_noaa.txt"
-OUTPUT_FILE = BASE_PROJ / "data" / "processed" / "module0" / "greenscope_final_causal_cube.nc"
+ENSO_ANOMALY_BASE = (1991, 2020)
+
 
 def parse_noaa_index(file_path, var_name):
-    """Parses NOAA index files where col 0 is Year and 1-12 are Months"""
-    # Read the file and identify numeric data rows
-    with open(file_path, 'r') as f:
-        lines = f.readlines()
-    
-    # Parse only lines that start with a 4-digit year
-    data_rows = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
+    """
+    Parse a NOAA PSL monthly index file: rows of a 4-digit year followed by exactly 12 values.
+    The time axis comes from each row's own year, and missing years raise an error, so a
+    header line or a gap can never shift later months.
+    """
+    rows = {}
+    for line in Path(file_path).read_text().splitlines():
+        parts = line.split()
+        if len(parts) != 13 or not (parts[0].isdigit() and len(parts[0]) == 4):
             continue
-        parts = stripped.split()
-        # Check if first element is a 4-digit year
-        if len(parts) > 0 and parts[0].isdigit() and len(parts[0]) == 4:
-            try:
-                year = int(parts[0])
-                # Try to convert the monthly values to floats
-                monthly_vals = [float(x) for x in parts[1:13]]
-                data_rows.append([year] + monthly_vals)
-            except (ValueError, IndexError):
-                # Skip rows that can't be parsed
-                continue
-    
-    if not data_rows:
-        raise ValueError(f"No valid data found in {file_path}")
-    
-    # Convert to DataFrame
-    df = pd.DataFrame(data_rows)
-    years = df[0].values
-    data_values = df.iloc[:, 1:13].values.flatten()
-    
-    # Ensure float type for NaN assignment
-    data_values = data_values.astype(float)
-    
-    # Create time index starting from Jan of the first year
-    time_idx = pd.date_range(start=f"{int(years[0])}-01-01", periods=len(data_values), freq='MS')
-    
-    # Replace missing values with NaN (NOAA uses -99.9 or -999.9)
-    data_values[data_values < -90] = np.nan
-    
-    return xr.DataArray(data_values, coords=[('time', time_idx)], name=var_name)
+        try:
+            vals = [float(x) for x in parts[1:]]
+        except ValueError:
+            continue
+        year = int(parts[0])
+        if year in rows:
+            raise ValueError(f"Duplicate year {year} in {file_path}")
+        rows[year] = vals
+    if not rows:
+        raise ValueError(f"No valid data rows found in {file_path}")
+    years = sorted(rows)
+    gaps = [y for y in range(years[0], years[-1] + 1) if y not in rows]
+    if gaps:
+        raise ValueError(f"Missing years in {file_path}: {gaps[:10]}")
+    values = np.array([rows[y] for y in years], dtype=float).ravel()
+    values[values <= -90] = np.nan
+    time = pd.date_range(f"{years[0]}-01-01", periods=values.size, freq="MS")
+    return xr.DataArray(values, coords=[("time", time)], name=var_name)
 
-# ------------------------------------------------------------------
-# 2. THE LEFT JOIN LOGIC
-# ------------------------------------------------------------------
-def run_integration(data_cube_path=None, enso_file=None, iod_file=None, output_file=None):
-    """
-    Run the causal integration process.
-    
-    Parameters:
-    -----------
-    data_cube_path : str or Path, optional
-        Path to the input data cube NetCDF file
-    enso_file : str or Path, optional
-        Path to ENSO NINO3.4 index file
-    iod_file : str or Path, optional
-        Path to IOD DMI index file
-    output_file : str or Path, optional
-        Path for the output NetCDF file
-    """
-    # Use provided paths or fall back to defaults
-    data_cube_path = Path(data_cube_path) if data_cube_path else DATA_CUBE_PATH
-    enso_file = Path(enso_file) if enso_file else ENSO_FILE
-    iod_file = Path(iod_file) if iod_file else IOD_FILE
-    output_file = Path(output_file) if output_file else OUTPUT_FILE
-    
-    # Validate input files exist
-    for file_path, name in [(data_cube_path, "Data Cube"), 
-                             (enso_file, "ENSO file"), 
-                             (iod_file, "IOD file")]:
-        if not file_path.exists():
-            raise FileNotFoundError(f"{name} not found at: {file_path}")
-    
-    print(f"📂 Loading Local Data Cube from: {data_cube_path}")
-    ds_cube = xr.open_dataset(data_cube_path)
 
-    print(f"📊 Parsing Global Indices...")
-    da_enso = parse_noaa_index(enso_file, "enso_nino34")
-    da_iod = parse_noaa_index(iod_file, "iod_dmi")
+def monthly_anomaly(da, base=ENSO_ANOMALY_BASE):
+    """Anomaly against the series' own calendar-month mean over the base period."""
+    clim = da.sel(time=slice(f"{base[0]}-01-01", f"{base[1]}-12-31")).groupby("time.month").mean("time")
+    if bool(clim.isnull().any()):
+        raise ValueError(f"Base period {base} has calendar months with no data")
+    anom = (da.groupby("time.month") - clim).drop_vars("month")
+    anom.name = da.name
+    return anom
 
-    # Align ENSO/IOD to the exact time range of your Data Cube
-    print(f"🔗 Aligning and Joining (Left Join)...")
-    da_enso_aligned = da_enso.sel(time=ds_cube.time, method='nearest')
-    da_iod_aligned = da_iod.sel(time=ds_cube.time, method='nearest')
 
-    # Merge: This broadcasts the 1D index across the 3D (Lat/Lon/Time) Cube
-    final_ds = xr.merge([ds_cube, da_enso_aligned, da_iod_aligned], compat='override')
+def align_exact(da, cube_time, name, allow_missing=False):
+    """Match a monthly index to the cube's months exactly (no nearest-month filling)."""
+    months = pd.DatetimeIndex(cube_time.values).to_period("M").to_timestamp()
+    aligned = da.reindex(time=months)
+    missing = [str(t)[:7] for t in months[aligned.isnull().values]]
+    print(f"   {name}: {len(months) - len(missing)} of {len(months)} cube months matched")
+    if missing and not allow_missing:
+        raise SystemExit(f"{name}: no value for {len(missing)} cube months, e.g. {missing[:6]}. "
+                         "Download the index again, or rerun with --allow-missing-index to keep them as NaN.")
+    aligned = aligned.assign_coords(time=cube_time.values)
+    if missing:
+        print(f"   {name}: left as NaN: {', '.join(missing)}")
+        aligned.attrs["missing_months"] = ", ".join(missing)
+    return aligned
 
-    # ------------------------------------------------------------------
-    # 3. SAVE FINAL OUTPUT
-    # ------------------------------------------------------------------
-    # Ensure output directory exists
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    final_ds.to_netcdf(output_file)
-    print("\n" + "="*50)
-    print("✅ INTEGRATION SUCCESSFUL")
-    print(f"💾 Saved to: {output_file}")
-    print(f"📋 Variables: {list(final_ds.data_vars)}")
-    print("="*50)
+
+def run_integration(cube=CUBE, enso=ENSO, iod=IOD, output=FINAL_CUBE, allow_missing=False):
+    print("STEP 8  Add ENSO and IOD to the cube")
+    for p, name in [(cube, "cube"), (enso, "Nino 3.4 file"), (iod, "DMI file")]:
+        if not Path(p).exists():
+            raise FileNotFoundError(f"{name} not found: {p}")
+
+    ds = xr.open_dataset(cube).load()
+    enso_abs = parse_noaa_index(enso, "enso_nino34")
+    if float(enso_abs.mean()) < 15:
+        raise SystemExit("The Nino 3.4 file already looks like an anomaly series; this script expects "
+                         "absolute SST (nina34.data). Remove the anomaly step or use that file.")
+    da_enso = monthly_anomaly(enso_abs)
+    da_iod = parse_noaa_index(iod, "iod_dmi")
+
+    out = ds.copy()
+    out["enso_nino34"] = align_exact(da_enso, ds.time, "enso_nino34", allow_missing)
+    out["iod_dmi"] = align_exact(da_iod, ds.time, "iod_dmi", allow_missing)
+    out["enso_nino34"].attrs.update(
+        units="degC", long_name="Nino 3.4 SST anomaly (ERSSTv5, NOAA CPC)",
+        comment=f"absolute Nino 3.4 SST minus its {ENSO_ANOMALY_BASE[0]}-{ENSO_ANOMALY_BASE[1]} "
+                "calendar-month mean; one regional value per month")
+    out["iod_dmi"].attrs.update(
+        units="degC", long_name="Dipole Mode Index (HadISST, NOAA PSL)",
+        comment="SST anomaly 10S-10N 50-70E minus 10S-0 90-110E; one regional value per month")
+    tag_causal_role(out)
+    out.attrs["source_enso_file"] = f"{Path(enso).name} sha256={sha256_file(enso)}"
+    out.attrs["source_iod_file"] = f"{Path(iod).name} sha256={sha256_file(iod)}"
+    out.attrs["source_data_cube"] = f"{Path(cube).name} sha256={sha256_file(cube)}"
+    out.attrs["history"] = (out.attrs.get("history", "") + "; causal_integration.py: Nino 3.4 converted to "
+                            "anomaly, ENSO and DMI matched to cube months exactly").lstrip("; ")
+
+    encoding = {v: {"zlib": True, "complevel": 4, "_FillValue": -9999.0} for v in out.data_vars}
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    out.to_netcdf(output, encoding=encoding)
+    print(f"   saved {output}  ({Path(output).stat().st_size / 1e6:.1f} MB)")
+    print(f"   variables: {list(out.data_vars)}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--data-cube", default=str(CUBE))
+    ap.add_argument("--enso", default=str(ENSO))
+    ap.add_argument("--iod", default=str(IOD))
+    ap.add_argument("--output", default=str(FINAL_CUBE))
+    ap.add_argument("--allow-missing-index", action="store_true",
+                    help="keep cube months with no index value as NaN instead of stopping")
+    args = ap.parse_args()
+    run_integration(args.data_cube, args.enso, args.iod, args.output, args.allow_missing_index)
+
 
 if __name__ == "__main__":
-    # Example: You can now pass custom paths via command line arguments
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='Integrate climate indices with data cube')
-    parser.add_argument('--base-dir', type=str, help='Base project directory')
-    parser.add_argument('--data-cube', type=str, help='Path to data cube file')
-    parser.add_argument('--enso', type=str, help='Path to ENSO index file')
-    parser.add_argument('--iod', type=str, help='Path to IOD index file')
-    parser.add_argument('--output', type=str, help='Path to output file')
-    
-    args = parser.parse_args()
-    
-    # Update base directory if provided
-    if args.base_dir:
-        BASE_PROJ = Path(args.base_dir)
-        # Recalculate default paths
-        DATA_CUBE_PATH = BASE_PROJ / "data" / "processed" / "module0" / "module0_asal_datacube.nc"
-        ENSO_FILE = BASE_PROJ / "data" / "raw" / "enso" / "nino34.txt"
-        IOD_FILE = BASE_PROJ / "data" / "raw" / "iod" / "dmi_noaa.txt"
-        OUTPUT_FILE = BASE_PROJ / "data" / "processed" / "module0" / "greenscope_final_causal_cube.nc"
-    
-    run_integration(
-        data_cube_path=args.data_cube,
-        enso_file=args.enso,
-        iod_file=args.iod,
-        output_file=args.output
-    )
+    main()

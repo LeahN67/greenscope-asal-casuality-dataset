@@ -49,19 +49,14 @@ class NinoExplorer:
             
             # Parse data
             # Check if data is absolute SST or anomaly by examining first few values
-            first_line = data_lines[0].split()
-            first_values = [float(x) for x in first_line[1:4] if x not in ['-99.99', '-999.00']]
-            
-            # If values are > 20, it's absolute SST, need to compute anomaly
-            is_absolute_sst = any(v > 20 for v in first_values)
             
             records = []
             for line in data_lines:
                 parts = line.split()
                 if len(parts) >= 13:  # Year + 12 months
                     year = int(parts[0])
-                    monthly_values = [float(x) if x != '-99.99' and x != '-999.00' else np.nan 
-                                    for x in parts[1:13]]
+                    # NOAA missing codes include -99.99, -999 and -9999; treat anything <= -90 as missing
+                    monthly_values = [float(x) if float(x) > -90 else np.nan for x in parts[1:13]]
                     
                     for month, value in enumerate(monthly_values, 1):
                         if not np.isnan(value):
@@ -73,11 +68,13 @@ class NinoExplorer:
             self.df.set_index('Date', inplace=True)
             self.df = self.df.sort_index()
             
-            # If absolute SST, convert to anomaly
+            # Absolute SST (about 24 to 29 degC) rather than anomalies: convert to anomaly
+            is_absolute_sst = self.df['Nino34'].median() > 15
             if is_absolute_sst:
                 print(f"   Detected absolute SST values - computing anomalies...")
-                # Compute climatology (monthly means)
-                climatology = self.df['Nino34'].groupby(self.df.index.month).mean()
+                # Climatology over 1991-2020, the same base period used for the cube
+                base = self.df.loc['1991-01-01':'2020-12-31', 'Nino34']
+                climatology = base.groupby(base.index.month).mean()
                 # Subtract climatology from each value
                 self.df['Nino34'] = self.df['Nino34'] - self.df.index.month.map(climatology)
                 print(f"   ✓ Converted to anomalies (mean = {self.df['Nino34'].mean():.3f}°C)")
@@ -96,7 +93,7 @@ class NinoExplorer:
             
             # Alternative: try reading as fixed-width or CSV
             try:
-                self.df = pd.read_csv(self.filepath, sep='\s+', header=None, 
+                self.df = pd.read_csv(self.filepath, sep=r'\s+', header=None, 
                                      skiprows=1, na_values=[-99.99, -999.00])
                 
                 # Reshape from wide to long
