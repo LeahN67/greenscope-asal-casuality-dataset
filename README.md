@@ -1,4 +1,4 @@
-# GreenScope ASAL Causal Data Cube
+# An ASAL Causal Data Cube
 
 A reproducible pipeline that builds a monthly, 0.05 degree climate and vegetation data cube for the 23 Arid and Semi-Arid Land (ASAL) counties of Kenya. It combines five public environmental datasets, together with county boundary data, on one grid and one monthly time axis, masked to the ASAL county polygons, and records a hypothesised driver, mediator and response ordering of the variables in the file itself. The cube is designed to support causal discovery and lagged analysis of how ocean-atmosphere drivers propagate through rainfall and soil moisture to vegetation.
 
@@ -26,8 +26,8 @@ Every analysis variable carries `units`, `long_name`, `causal_layer` and `causal
 ## Quick start
 
 ```bash
-git clone https://github.com/LeahN67/greenscope-asal-causality-dataset.git
-cd greenscope-asal-causality-dataset
+git clone https://github.com/LeahN67/asal-causality-dataset.git
+cd asal-causality-dataset
 python -m venv venv
 # Windows: venv\Scripts\activate      Linux/macOS: source venv/bin/activate
 pip install -r requirements.txt
@@ -149,7 +149,7 @@ Each source keeps its own licence and citation requirements.
 
 ## Citation
 
-Njuguna, L. H. (2026). GreenScope ASAL Causal Data Cube: pipeline for a causally structured climate and vegetation data cube for Kenya's Arid and Semi-Arid Lands. GitHub. https://github.com/LeahN67/greenscope-asal-causality-dataset
+Njuguna, L. H. (2026). ASAL Causal Data Cube: pipeline for a causally structured climate and vegetation data cube for Kenya's Arid and Semi-Arid Lands. GitHub. https://github.com/LeahN67/asal-causality-dataset
 
 ## License
 

@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software or the data cube it produces, please cite it as below."
 type: software
-title: "GreenScope ASAL causal data cube pipeline"
+title: "ASAL causal data cube pipeline"
 abstract: >-
   Reproducible pipeline that builds a monthly, 0.05 degree climate and vegetation
   data cube for the 23 Arid and Semi-Arid Land counties of Kenya from CHIRPS,
@@ -9,14 +9,14 @@ abstract: >-
   the county polygons and annotated with a driver, mediator and response ordering.
 authors:
   - family-names: "Njuguna"
-    given-names: "Leah Hannah"
+    given-names: "Leah Hannah Munjiru"
     orcid: "https://orcid.org/0009-0005-6185-1786"
     affiliation: "University of Nairobi"
 version: "1.0.0"
 date-released: "2026-10-19"
 doi: "10.5281/zenodo.23479782"
 license: Apache-2.0
-repository-code: "https://github.com/LeahN67/greenscope-asal-causality-dataset"
+repository-code: "https://github.com/LeahN67/asal-causality-dataset"
 keywords:
   - Kenya
   - drylands
@@ -28,10 +28,10 @@ keywords:
   - data cube
 references:
   - type: data
-    title: "GreenScope ASAL causal data cube: monthly climate and vegetation variables for Kenya's Arid and Semi-Arid Lands, 2000 to 2025"
+    title: "ASAL causal data cube: monthly climate and vegetation variables for Kenya's Arid and Semi-Arid Lands, 2000 to 2025"
     authors:
       - family-names: "Njuguna"
-        given-names: "Leah Hannah"
+        given-names: "Leah Hannah Munjiru"
         orcid: "https://orcid.org/0009-0005-6185-1786"
     doi: "10.5281/zenodo.23481003"
     year: 2026
